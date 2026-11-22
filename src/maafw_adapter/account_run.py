@@ -725,6 +725,8 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             and self.run_signal != SERVER_MAINTENANCE
             and not self.stopped_manually,
         )
+        if self.stopped_manually:
+            self._append_log("已手动停止", warning=True)
         # 收尾（含脚本后任务）抛出的异常原样交给生命周期桥，由它调一次 on_crash；
         # 这里再调就会重复记「异常」、重复发错误通知。
         try:
