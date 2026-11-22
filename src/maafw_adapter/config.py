@@ -32,6 +32,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path as NativePath
@@ -71,6 +72,15 @@ from auto_mas_core.host.models_config_shared import (
     none_as,
 )
 from pydantic import Field
+
+# 配置分组 ``Info`` / ``Notify`` 与 SDK 基类上同名的嵌套类重名（基类的字段是小写的 ``info``、
+# ``notify``），pydantic 每次建类都报「shadows an attribute in parent」。分组名就是落盘和接口里的键，
+# 不能改名，只把这两个类的这句警告关掉。
+warnings.filterwarnings(
+    "ignore",
+    message=r'Field name "(Info|Notify)" in "MaaFW(User)?Config" shadows an attribute',
+    category=UserWarning,
+)
 
 
 class MaaFWUserConfig(UserEntry):
