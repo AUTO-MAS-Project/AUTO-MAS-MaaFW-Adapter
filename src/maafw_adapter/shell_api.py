@@ -30,26 +30,27 @@ from typing import Any
 
 from app.core import Config
 from app.models.schema import MaaFWShellInstanceImportItem, MaaFWShellInstanceItem
-from app.task.MaaFW.api_service.common import (
+from maafw_interface.interface.loader import (
+    MaaFWInterfaceLoadError,
+    load_interface_model_cached,
+)
+from maafw_interface.interface.models import MaaFWInterface
+from maafw_interface.interface.preview import interface_text_translator
+from maafw_interface.interface.task_config import (
+    normalize_global_options,
+    normalize_snapshot,
+)
+from maafw_project_update.api.common import (
     MaaFWApiReply,
     logger,
     maafw_effective_root,
 )
-from app.task.MaaFW.tools.core.interface.loader import (
-    MaaFWInterfaceLoadError,
-    load_interface_model_cached,
-)
-from app.task.MaaFW.tools.core.interface.models import MaaFWInterface
-from app.task.MaaFW.tools.core.interface.preview import interface_text_translator
-from app.task.MaaFW.tools.core.interface.task_config import (
-    normalize_global_options,
-    normalize_snapshot,
-)
-from app.task.MaaFW.tools.embedded.embedded_project import (
+from maafw_project_update.host.embedded_project import (
     embedded_project_dir,
     view_imported_from,
 )
-from app.task.MaaFW.tools.embedded.shell_instances import (
+
+from .shell_instances import (
     ShellImportPlan,
     ShellInstance,
     Translate,
@@ -117,7 +118,7 @@ def _scan_first_root(roots: list[Path]) -> tuple[Path | None, list[ShellInstance
 
 
 def _existing_user_names(script_config: Any) -> list[str]:
-    return [str(user.Info.Name or "") for _, user in script_config.UserData.items()]
+    return [str(user.Info.Name or "") for _, user in script_config.users.items()]
 
 
 def _interface_name(items: list[Any], raw: str) -> str:
@@ -129,20 +130,16 @@ def _interface_name(items: list[Any], raw: str) -> str:
 def _family_script_config(script_id: str) -> Any:
     """外壳配置导入要建账号，拿的是托管的配置对象（这组端点归通用 MFW 自己）。
 
-    先经属主登记确认这是属主已登记的 MFW 托管（认不出时的异常与文案同其它 MFW 端点），再按
-    确切类型取宿主托管表里的配置对象。
+    先经属主登记确认这是属主已登记的 MFW 托管（认不出时的异常与文案同其它 MFW 端点），认出来就
+    取宿主托管表里的配置对象（插件里不再按宿主的家族类型表二次核对）。
     """
 
     import uuid
 
-    from app.task.MaaFW.registration import MAAFW_FAMILY_TYPES
-    from app.task.MaaFW.tools.embedded.owners import NOT_MAAFW_MESSAGE, find_managed
+    from maafw_project_update.host.owners import find_managed
 
     find_managed(script_id)
-    script_config = Config.ScriptConfig[uuid.UUID(script_id)]
-    if type(script_config) not in MAAFW_FAMILY_TYPES:
-        raise TypeError(NOT_MAAFW_MESSAGE)
-    return script_config
+    return Config.ScriptConfig[uuid.UUID(script_id)]
 
 
 @dataclass
@@ -518,7 +515,7 @@ def _merge_global_options(
 def _user_of(script_config: Any, user_id: str) -> Any | None:
     """按 ID 取账号配置；这个脚本里没有就返回 None。"""
 
-    for key, user in script_config.UserData.items():
+    for key, user in script_config.users.items():
         if str(key) == str(user_id):
             return user
     return None

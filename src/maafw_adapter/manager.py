@@ -52,30 +52,32 @@ from app.core.notify.task_content import (
 )
 from app.core.notify.task_content import screenshot_entries as screenshot_entries
 from app.core.ws import protocol
-from app.models.config import MaaFWConfig, MaaFWUserConfig
 from app.models.emulator import DeviceBase, DeviceProvider
 from app.models.notification.report import TaskResultData, TaskResultReport
 from app.models.schema import WSTaskNoticeData
 from app.models.task import ScriptItem, UserItem
 from app.task.game import current_game_session, game_target_id
-from app.task.MaaFW.registration import MAAFW_RUN_TYPES
-from app.task.MaaFW.tools.backup_archive import (
+from app.task.run_flow import point
+from app.utils import TASK_MODE_ZH, get_logger
+from maafw_agent_env.host.runtime_check import describe_unusable_runtime
+from maafw_agent_env.host.runtime_route import resolve_runtime_pool_route
+from maafw_project_update.glue.backup_archive import (
     archive_mas_runtime_backup,
     archive_native_backup,
     read_overlay_values,
 )
-from app.task.MaaFW.tools.embedded import owners
-from app.task.MaaFW.tools.embedded.default_snapshot import (
+from maafw_project_update.glue.default_snapshot import (
     fill_default_task_snapshots,
 )
-from app.task.MaaFW.tools.embedded.embedded_project import (
+from maafw_project_update.host import owners
+from maafw_project_update.host.embedded_project import (
     resolve_maafw_project_root,
 )
-from app.task.MaaFW.tools.embedded.owners import RecordPatch, write_managed_record
-from app.task.MaaFW.tools.embedded.project_environment import (
+from maafw_project_update.host.owners import RecordPatch, write_managed_record
+from maafw_project_update.host.project_environment import (
     prepare_project_environment_sync,
 )
-from app.task.MaaFW.tools.embedded.project_session import (
+from maafw_project_update.host.project_session import (
     BENIGN_SKIPS,
     SKIP_OCCUPIED,
     MaaFWProjectDownload,
@@ -90,32 +92,30 @@ from app.task.MaaFW.tools.embedded.project_session import (
     describe_open_failure,
     discover_prefetch,
 )
-from app.task.MaaFW.tools.embedded.proxy_quota import (
+from maafw_project_update.host.update_credentials import (
+    AutoUpdateMode,
+    resolve_auto_update_mode,
+)
+from maafw_runner.host.proxy_quota import (
     proxy_times_used_up,
     proxy_today,
 )
-from app.task.MaaFW.tools.embedded.run_notices import (
+from maafw_runner.host.run_notices import (
     proxy_result_body,
     signal_summary_title,
     user_results_text,
 )
-from app.task.MaaFW.tools.embedded.runtime_check import describe_unusable_runtime
-from app.task.MaaFW.tools.embedded.runtime_route import resolve_runtime_pool_route
-from app.task.MaaFW.tools.embedded.signal_notice import (
+from maafw_runner.host.signal_notice import (
     SERVER_MAINTENANCE,
     MaaFWSignalTracker,
     push_signal_notices,
 )
-from app.task.MaaFW.tools.embedded.telemetry_project import record_project_run
-from app.task.MaaFW.tools.embedded.update_credentials import (
-    AutoUpdateMode,
-    resolve_auto_update_mode,
-)
-from app.task.run_flow import point
-from app.utils import TASK_MODE_ZH, get_logger
+from maafw_runner.host.telemetry_project import record_project_run
+
+from .config import MaaFWConfig, MaaFWUserConfig
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查，运行期不导入 maa
-    from app.task.MaaFW.tools.embedded.runner_task import MaaFWPluginAutoProxyTask
+    from .account_run import MaaFWPluginAutoProxyTask
 
 logger = get_logger("MFW 内置运行")
 
@@ -126,7 +126,7 @@ _BENIGN_SKIPS = BENIGN_SKIPS
 def describe_unsupported_host() -> str | None:
     """本机进程不是 x64 时的「MaaFW 目前只支持 x64」提示；是 x64 时 None。"""
 
-    from app.task.MaaFW.tools.core.native.architecture import (
+    from maafw_native.architecture import (
         describe_unsupported_architecture,
     )
 
@@ -145,6 +145,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         script_info: ScriptItem,
         *,
         device_provider: DeviceProvider | None = None,
+        host_locked_config: MaaFWConfig | None = None,
     ):
         super().__init__()
 
@@ -163,6 +164,9 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         self._device_provider = device_provider
         # check() 获取 X 锁，运行及用户收尾直接修改原配置，最后释放。
         self._script_locked = False
+        # 插件路径：L2 建 L3 之前已经拿了托管 X 锁（不可重入），这里只记下宿主锁着的
+        # 那份配置；不为 None 时 _check 不再自己拿锁，也不往 config_locks 里放票。
+        self._host_locked_config = host_locked_config
         # 当前正在跑的那一位用户的 AutoProxy 任务；每个账号各建一个。
         self.inner_task: "MaaFWPluginAutoProxyTask | None" = None
         self._inner_finalized = True
@@ -237,8 +241,8 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         except (KeyError, ValueError):
             return "MFW 托管配置不存在，请刷新后重试"
 
-        # 按确切类型认（不靠继承）：MFW 管理器现在运行这三种托管。
-        if type(script_config) not in MAAFW_RUN_TYPES:
+        # 按确切类型认（不靠继承）：本插件的管理器只运行本插件的 MaaFWConfig。
+        if type(script_config) is not MaaFWConfig:
             return "托管配置类型错误，不是 MFW 托管类型"
         self.script_config = script_config
 
@@ -285,11 +289,13 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         try:
             if problem := await self._project.hold(work):
                 return problem
-            # X 票留在管理器任务上下文；取得后才释放项目预约，两者连续交接。
-            ticket = await script_config.try_lock_x()
-            if ticket is None:
-                return SKIP_OCCUPIED
-            self.config_locks[script_config.uid] = ticket
+            if self._host_locked_config is None:
+                # X 票留在管理器任务上下文；取得后才释放项目预约，两者连续交接。
+                ticket = await script_config.try_lock_x()
+                if ticket is None:
+                    return SKIP_OCCUPIED
+                self.config_locks[script_config.uid] = ticket
+            # 宿主已持锁时票在 L2 手里，收尾 _commit_user_data 照旧保存、找不到票就不解锁。
             self._script_locked = True
         except Exception as exc:  # noqa: BLE001 - OSError 之类也要给用户一句话
             return describe_open_failure(script_id, exc)
@@ -297,7 +303,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
             await self._project.release()
         assert self._project_lease is not None
         project_root = self._project_lease.view_path
-        user_config = script_config.UserData
+        user_config = script_config.users
         self.user_config = user_config
 
         # 只跑「已启用且剩余天数未耗尽」的用户；单独运行指定了用户时只保留该账号。
@@ -379,7 +385,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         """``route`` 是 :meth:`_resolve_runtime_pool_route` 的结果，调用方在工作线程里取。"""
 
         # 延迟导入：runner_task 经 runner 包 import maa，导入即打开 DLL。
-        from app.task.MaaFW.tools.embedded.runner_task import (
+        from .account_run import (
             MaaFWPluginAutoProxyTask,
         )
 
@@ -434,7 +440,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         ``run_messages.format_user_log_line`` 一致，这样并入账号日志后看不出接缝。
         """
 
-        from app.task.MaaFW.tools.embedded.run_messages import update_log_lines
+        from maafw_runner.host.run_messages import update_log_lines
 
         logger.info(f"MFW 项目更新：{message}")
         lines = update_log_lines(message, datetime.now().astimezone())

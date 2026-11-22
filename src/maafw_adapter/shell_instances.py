@@ -62,10 +62,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import TypeAdapter
-
 from app.config import WindowsNameString
-from app.task.MaaFW.tools.core.interface.models import (
+from app.utils import get_logger
+from maafw_interface.interface.models import (
     MaaFWInterface,
     MaaFWOption,
     MaaFWPreset,
@@ -75,14 +74,14 @@ from app.task.MaaFW.tools.core.interface.models import (
     build_pretask_task_name,
     iter_pretasks,
 )
-from app.task.MaaFW.tools.core.interface.task_config import (
+from maafw_interface.interface.task_config import (
     build_global_option_map,
     build_interface_preset_snapshot,
     build_task_option_maps,
     normalize_global_options,
     normalize_task_options_by_task,
 )
-from app.utils import get_logger
+from pydantic import TypeAdapter
 
 logger = get_logger("MFW 外壳配置导入")
 
