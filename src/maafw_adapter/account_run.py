@@ -940,6 +940,8 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
                 task_snapshot=task_snapshot or None,
                 script_hotkeys=script_hotkeys,
                 excluded_task_reasons=inspection.off_day_reasons(),
+                # 解析库不再自己读宿主 res/version.json，PI_CLIENT_VERSION 由调用方给
+                client_version=str(getattr(Config, "VERSION", "") or ""),
             )
             return attach_snapshot_findings(
                 apply_plan_rules(plan, EMPTY_PLAN_RULES), inspection
