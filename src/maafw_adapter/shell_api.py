@@ -28,8 +28,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.core import Config
-from app.models.schema import MaaFWShellInstanceImportItem, MaaFWShellInstanceItem
+from auto_mas_core.host.core import Config
+from auto_mas_core.host.models_schema import (
+    MaaFWShellInstanceImportItem,
+    MaaFWShellInstanceItem,
+)
 from maafw_interface.interface.loader import (
     MaaFWInterfaceLoadError,
     load_interface_model_cached,

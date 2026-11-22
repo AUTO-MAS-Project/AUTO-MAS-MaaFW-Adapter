@@ -10,41 +10,54 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Mapping
 
+# 通知格式没有 SDK 出口（已知问题 #9），其余宿主能力都经 auto_mas_core.host 取
 import app.core.notify.formats.maafw as _format_maafw
-from app.core import Config, Notify, Publisher
-from app.core.notify.task_content import (
+from auto_mas_core.host.core import Config, Notify, Publisher
+from auto_mas_core.host.core_notify_task_content import (
     NOTIFY_SCREENSHOT_LIMIT as NOTIFY_SCREENSHOT_LIMIT,
 )
-from app.core.notify.task_content import (
+from auto_mas_core.host.core_notify_task_content import (
     prepare_screenshot_images as prepare_screenshot_images,
 )
-from app.core.notify.task_content import screenshot_entries as screenshot_entries
-from app.core.ws import protocol
-from app.models.emulator import DeviceBase, DeviceInfo
-from app.models.notification import LocalNotice
-from app.models.schema import (
+from auto_mas_core.host.core_notify_task_content import (
+    screenshot_entries as screenshot_entries,
+)
+from auto_mas_core.host.core_ws import protocol
+from auto_mas_core.host.models_emulator import DeviceBase, DeviceInfo
+from auto_mas_core.host.models_notification import LocalNotice
+from auto_mas_core.host.models_schema import (
     HistoryAttachmentInput,
     HistorySnapshotStatistic,
     HistoryWrite,
     WSTaskNoticeData,
 )
-from app.models.task import LogRecord, ScriptItem, TaskExecuteBase
-from app.services import execute_script_task
-from app.task.client import client_executable_path, client_launcher_path
-from app.task.emulator_core import close_emulator
-from app.task.game import game_device_id, game_is_emulator, game_target_id
-from app.task.run_flow import (
+from auto_mas_core.host.models_task import LogRecord, ScriptItem, TaskExecuteBase
+from auto_mas_core.host.services import execute_script_task
+from auto_mas_core.host.task_client import (
+    client_executable_path,
+    client_launcher_path,
+)
+from auto_mas_core.host.task_emulator_core import close_emulator
+from auto_mas_core.host.task_game import (
+    game_device_id,
+    game_is_emulator,
+    game_target_id,
+)
+from auto_mas_core.host.task_run_flow import (
     begin_attempt,
     point,
 )
-from app.utils import UTC4, get_logger, power
-from app.utils.common.game_resolution import (
-    parse_resolution_option,
-)
-from app.utils.common.process.scope import (
+from auto_mas_core.host.utils import UTC4, game_resolution, get_logger, power
+from auto_mas_core.host.utils_common_process_scope import (
     current_process_scope,
 )
-from app.utils.common.process.session import desktop_process_target
+from auto_mas_core.host.utils_common_process_session import desktop_process_target
+from maafw_adapter_kit.option_secrets import (
+    DPAPI_SECRET_OPENER,
+    open_task_snapshot,
+    script_task_snapshots,
+    user_task_snapshot,
+)
 from maafw_interface.controller_win32.service import (
     controller_has_window_rules,
 )
@@ -85,12 +98,6 @@ from maafw_interface.runner.task_selection import (
 )
 from maafw_native.project_runtime import (
     describe_project_runtime_architecture_mismatch,
-)
-from maafw_project_update.glue.option_secrets import (
-    DPAPI_SECRET_OPENER,
-    open_task_snapshot,
-    script_task_snapshots,
-    user_task_snapshot,
 )
 from maafw_project_update.host.embedded_project import resolve_maafw_project_root
 from maafw_project_update.host.project_path import (
@@ -856,7 +863,9 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             url=str(game.URL or "").strip(),
             arguments=game.Arguments,
             wait_seconds=game.WaitTime,
-            unity_resolution=parse_resolution_option(game.UnityResolution),
+            unity_resolution=game_resolution.parse_resolution_option(
+                game.UnityResolution
+            ),
             close_mode=str(game.CloseMode or "OnFailure").strip(),
             configured_hwnd=self.script_config.Device.HWnd,
             game_path_error=game_path_error,
@@ -1382,7 +1391,9 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         # 只在真正要重启 MAS 自己启动的客户端时撤销预下载资格。
         # 等待 FluxDown/HTTPX 确认停止后才关闭游戏或模拟器；AttachOnly、
         # 最后一次尝试和不重登的资源换载荷路径不需要重置成功计时。
-        from app.core.script_update_queue import report_script_task_retrying
+        from auto_mas_core.host.core_script_update_queue import (
+            report_script_task_retrying,
+        )
 
         await report_script_task_retrying()
         self._append_log("本轮失败，关闭由 MAS 启动的游戏/模拟器，下一轮重新启动")
@@ -1431,7 +1442,9 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             name, state = task_point
             point(self, "special", key=name, state=state)
         if self._ledger.current_has_success():
-            from app.core.script_update_queue import report_script_task_completed
+            from auto_mas_core.host.core_script_update_queue import (
+                report_script_task_completed,
+            )
 
             report_script_task_completed()
 

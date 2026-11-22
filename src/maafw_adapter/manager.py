@@ -41,34 +41,40 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from app.config import ConfigCollection, config_manager
-from app.core import Config, Notify, Publisher
+# 基类没有 SDK 出口（已知问题 #9），其余宿主能力都经 auto_mas_core.host 取
 from app.core.notify.lifecycle import NotificationTaskBase as NotificationTaskBase
-from app.core.notify.task_content import (
+from auto_mas_core.host.config import ConfigCollection, config_manager
+from auto_mas_core.host.core import Config, Notify, Publisher
+from auto_mas_core.host.core_notify_task_content import (
     NOTIFY_SCREENSHOT_LIMIT as NOTIFY_SCREENSHOT_LIMIT,
 )
-from app.core.notify.task_content import (
+from auto_mas_core.host.core_notify_task_content import (
     prepare_screenshot_images as prepare_screenshot_images,
 )
-from app.core.notify.task_content import screenshot_entries as screenshot_entries
-from app.core.ws import protocol
-from app.models.emulator import DeviceBase, DeviceProvider
-from app.models.notification.report import TaskResultData, TaskResultReport
-from app.models.schema import WSTaskNoticeData
-from app.models.task import ScriptItem, UserItem
-from app.task.game import current_game_session, game_target_id
-from app.task.run_flow import point
-from app.utils import TASK_MODE_ZH, get_logger
-from maafw_agent_env.host.runtime_check import describe_unusable_runtime
-from maafw_agent_env.host.runtime_route import resolve_runtime_pool_route
-from maafw_project_update.glue.backup_archive import (
+from auto_mas_core.host.core_notify_task_content import (
+    screenshot_entries as screenshot_entries,
+)
+from auto_mas_core.host.core_ws import protocol
+from auto_mas_core.host.models_emulator import DeviceBase, DeviceProvider
+from auto_mas_core.host.models_notification_report import (
+    TaskResultData,
+    TaskResultReport,
+)
+from auto_mas_core.host.models_schema import WSTaskNoticeData
+from auto_mas_core.host.models_task import ScriptItem, UserItem
+from auto_mas_core.host.task_game import current_game_session, game_target_id
+from auto_mas_core.host.task_run_flow import point
+from auto_mas_core.host.utils import TASK_MODE_ZH, get_logger
+from maafw_adapter_kit.backup_archive import (
     archive_mas_runtime_backup,
     archive_native_backup,
     read_overlay_values,
 )
-from maafw_project_update.glue.default_snapshot import (
+from maafw_adapter_kit.default_snapshot import (
     fill_default_task_snapshots,
 )
+from maafw_agent_env.host.runtime_check import describe_unusable_runtime
+from maafw_agent_env.host.runtime_route import resolve_runtime_pool_route
 from maafw_project_update.host import owners
 from maafw_project_update.host.embedded_project import (
     resolve_maafw_project_root,
@@ -326,7 +332,9 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
             try:
                 await callback(script_config)
             except BaseException as exc:
-                from app.utils.common.fluxdown_cli import FluxdownCancelUnconfirmed
+                from auto_mas_core.host.utils_common_fluxdown_cli import (
+                    FluxdownCancelUnconfirmed,
+                )
 
                 ticket = self.config_locks.pop(script_config.uid, None)
                 self._script_locked = False
@@ -366,7 +374,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         if not emulator_id or emulator_id == "-":
             return None
 
-        from app.core import GameManager
+        from auto_mas_core.host.core import GameManager
 
         device_provider = self._device_provider or GameManager.get_emulator_instance
         try:
@@ -461,7 +469,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         elif isinstance(event, MaaFWProjectPoint):
             point(self, event.stage, state=event.state, key=event.key)
         elif isinstance(event, MaaFWProjectDownload):
-            from app.core.downloads import download_observer
+            from auto_mas_core.host.core_downloads import download_observer
 
             observer = download_observer.get()
             if observer is not None:
@@ -779,7 +787,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
     def _account_emulator_without_device(owner) -> bool:
         """账号另绑了模拟器目标、设备却是「-」；目标已不存在时不拦，留给 select 报原因。"""
 
-        from app.core import Config
+        from auto_mas_core.host.core import Config
 
         binding = owner.game
         if binding.game_id == "-" or binding.device_id != "-":

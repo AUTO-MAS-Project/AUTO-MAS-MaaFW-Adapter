@@ -62,8 +62,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from app.config import WindowsNameString
-from app.utils import get_logger
+from auto_mas_core.host.config import WindowsNameString
+from auto_mas_core.host.utils import get_logger
 from maafw_interface.interface.models import (
     MaaFWInterface,
     MaaFWOption,
