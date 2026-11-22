@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# 单元测试只在本地跑，不随仓库提交
+/tests/
+
+# 宿主测试运行产生的用户目录
+/config/
+/data/
+/debug/
+/history/
+/temp/

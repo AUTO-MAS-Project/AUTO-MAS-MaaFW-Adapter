@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auto-mas-maafw-adapter"
+version = "0.1.0"
+description = "MFW (generic MaaFramework) specialized script adapter for AUTO-MAS"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.12,<3.13"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "AUTO-MAS Team" }]
+keywords = [
+  "auto-mas-plugin",
+  "auto-mas-id:maafw_adapter",
+]
+# 0.1.0 直接 import 两块库和三块服务插件（跨插件越界见 README），因此都写次版本上限。
+dependencies = [
+  "auto-mas-core>=5.9.0b1,<6",
+  "auto-mas-maafw-interface>=0.1.0,<0.2",
+  "auto-mas-maafw-native>=0.1.0,<0.2",
+  "auto-mas-maafw-agent-env>=0.1.0,<0.2",
+  "auto-mas-maafw-runner>=0.1.0,<0.2",
+  "auto-mas-maafw-project-update>=0.1.0,<0.2",
+]
+
+[project.urls]
+Changelog = "https://github.com/AUTO-MAS-Project/AUTO-MAS-MaaFW-Adapter/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/AUTO-MAS-Project/AUTO-MAS-MaaFW-Adapter"
+Repository = "https://github.com/AUTO-MAS-Project/AUTO-MAS-MaaFW-Adapter"
+Documentation = "https://github.com/AUTO-MAS-Project/AUTO-MAS-MaaFW-Adapter/blob/master/README.md"
+Issues = "https://github.com/AUTO-MAS-Project/AUTO-MAS-MaaFW-Adapter/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+maafw_adapter = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = ["F403", "F405"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["maafw_adapter"]
+known-third-party = ["app", "auto_mas_core", "maafw_interface", "maafw_native", "maafw_agent_env", "maafw_runner", "maafw_project_update"]
