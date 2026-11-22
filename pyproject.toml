@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "auto-mas-maafw-adapter"
-version = "0.1.0"
+version = "0.2.0"
 description = "MFW (generic MaaFramework) specialized script adapter for AUTO-MAS"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.12,<3.13"
@@ -20,12 +20,12 @@ keywords = [
 # 同号、带出口前后都是 5.9.0b1，下限提不上去，改在导入时检查（plugin.py）。
 dependencies = [
   "auto-mas-core>=5.9.0b1,<6",
-  "auto-mas-maafw-interface>=0.1.0,<0.2",
-  "auto-mas-maafw-native>=0.1.0,<0.2",
-  "auto-mas-maafw-adapter-kit>=0.1.0,<0.2",
-  "auto-mas-maafw-agent-env>=0.1.0,<0.2",
-  "auto-mas-maafw-runner>=0.1.0,<0.2",
-  "auto-mas-maafw-project-update>=0.1.0,<0.2",
+  "auto-mas-maafw-interface>=0.2.0,<0.3",
+  "auto-mas-maafw-native>=0.2.0,<0.3",
+  "auto-mas-maafw-adapter-kit>=0.2.0,<0.3",
+  "auto-mas-maafw-agent-env>=0.2.0,<0.3",
+  "auto-mas-maafw-runner>=0.2.0,<0.3",
+  "auto-mas-maafw-project-update>=0.2.0,<0.3",
 ]
 
 [project.urls]
