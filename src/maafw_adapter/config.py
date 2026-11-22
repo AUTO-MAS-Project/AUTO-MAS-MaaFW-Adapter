@@ -24,6 +24,9 @@
 默认值与 description 不变；基类换成 SDK 的 ``UserEntry`` / ``ScriptEntry``，账号集合
 ``UserData`` 改名 ``users``（旧文档在 ``normalize_payload`` 里改名）。类名不能改：
 项目更新按 ``type(config).__name__`` 推出托管种类。
+
+保存账号前的任务快照整理（全局选项双写、密码加密）在插件的 ``prepare_user_update`` 钩子里做
+（``plugin.py``），宿主 ``Config.update_user`` 在写入前调它，这里不再覆盖 ``update()``。
 """
 
 from __future__ import annotations
@@ -32,12 +35,11 @@ import json
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path as NativePath
-from typing import Annotated, ClassVar, Literal, Self, cast
+from typing import Annotated, ClassVar, Literal
 
 from auto_mas_core import ScriptEntry, UserEntry
 from auto_mas_core.host.config import (
     ConfigCollection,
-    ConfigEntry,
     ConfigGroup,
     Virtual,
     collection,
@@ -193,36 +195,6 @@ class MaaFWUserConfig(UserEntry):
     def plugin_enabled(self):
         """向宿主提供已有账号启用状态。"""
         return self.Info.Status
-
-    async def update(
-        self, other: ConfigEntry, *, check_visibility: bool = True
-    ) -> None:
-        """保存前在插件内准备任务快照（密码加密），再交给基类提交。
-
-        插件类型拿不到宿主的配置回调，原来经 ``prepare_user_update`` 做的这一步改在这里做
-        （照 MAA 适配器）：只取补丁里明确给出的组和字段，避免导出视图里的默认值盖掉绑定。
-        """
-        if not check_visibility or "Task" not in other.model_fields_set:
-            await super().update(cast(Self, other), check_visibility=check_visibility)
-            return
-        collection_node = self.parent
-        script = collection_node.parent if collection_node is not None else None
-        if script is None:
-            await super().update(cast(Self, other), check_visibility=check_visibility)
-            return
-        # 规则 L：跨插件导入只写在函数体内
-        from maafw_project_update.glue.user_update import prepare_user_update
-
-        data = {
-            group: {field: values.__dict__[field] for field in values.model_fields_set}
-            for group in other.model_fields_set
-            if group in other._cfg_group_fields
-            and isinstance(values := other.__dict__[group], ConfigGroup)
-        }
-        await prepare_user_update(script, self, data=data)
-        await super().update(
-            type(self).model_validate(data), check_visibility=check_visibility
-        )
 
 
 class MaaFWConfig(ScriptEntry):

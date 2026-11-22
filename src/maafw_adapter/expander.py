@@ -31,14 +31,23 @@ from typing import Any
 
 from auto_mas_core import TaskMode, UserExpander
 
+# 还没收尾的外壳（插件停用前的 teardown_blockers 看它）
+_ACTIVE_RUNS: set[MaaFWExpander] = set()
+
+
+def active_run_count() -> int:
+    """正在跑（管理器还没收尾）的 MFW 托管数。"""
+
+    return len(_ACTIVE_RUNS)
+
 
 class MaaFWExpander(UserExpander):
-    """0.1.0：整轮交给沿用的脚本级管理器；L3 只做外壳。"""
+    """整轮交给沿用的脚本级管理器；L3 只做外壳。"""
 
     async def main_task(self) -> None:
         await self.script_info.set_state(status="运行")
         self._entered = True
-        from .manager import MaaFWEmbeddedManager  # 规则 L：函数内导入
+        from .manager import _BENIGN_SKIPS, MaaFWEmbeddedManager  # 规则 L：函数内导入
 
         manager = MaaFWEmbeddedManager(
             self.script_info, host_locked_config=self.script_config
@@ -48,6 +57,7 @@ class MaaFWExpander(UserExpander):
         manager.maintenance = False
         # L2 收尾时复位（app/task/script_expander.py）
         self.script_info._manager_controls_users = True
+        _ACTIVE_RUNS.add(self)
         try:
             await manager._execute_task()
             error = manager.execution.error
@@ -56,7 +66,17 @@ class MaaFWExpander(UserExpander):
                 and type(error).__name__ == "FluxdownCancelUnconfirmed"
             ):
                 raise error
+            # 管理器记了「跳过」（项目正在更新 / 被占用，或账号全因停服维护跳过）时告诉 L3，
+            # 免得 L3 收尾把它改成「完成」；托管级检查没过（管理器记「异常」、已发过错误提示）
+            # 按 SDK 对 check() 返回原因的口径抛出，L3 收尾记「异常」
+            if manager.check_result in _BENIGN_SKIPS:
+                self._skipped = manager.check_result
+            elif manager.check_result not in ("Pass", "-"):
+                raise ValueError(manager.check_result)
+            elif self.script_info.info.status == "跳过":
+                self._skipped = "跳过"
         finally:
+            _ACTIVE_RUNS.discard(self)
             await manager.callbacks.close()
             if self.task_info.mode == TaskMode.AUTO_PROXY:
                 manager.finalize_completion_details(self.script_info)
