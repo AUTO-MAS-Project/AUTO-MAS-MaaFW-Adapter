@@ -212,6 +212,22 @@ from maafw_runner.host.signal_notice import (
     MaaFWSignalTracker,
 )
 
+# 运行积木早于「被项目停止」标记时没有这两个出口：结果里也不会有这一项，照旧写「任务完成」。
+try:
+    from maafw_runner.host.run_messages import (
+        completed_result_log_lines,
+        result_task_labels,
+    )
+except ImportError:  # pragma: no cover - 只有旧运行积木走这里
+
+    def completed_result_log_lines(plan: Any, result: Any) -> list[str]:
+        labels = format_completed_task_labels(plan, result.completedTasks)
+        return ["MaaFW 任务完成: " + ", ".join(labels)]
+
+    def result_task_labels(plan: Any, result: Any) -> list[str]:
+        return format_completed_task_labels(plan, result.completedTasks)
+
+
 logger = get_logger("MaaFW 插件自动代理")
 
 # 桌面游戏启停的时限常量（等窗口、URL 拉起、兜底关闭）只在 desktop_game 里定义一份。
@@ -636,12 +652,12 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
                 self.run_complete = True
                 if self.cur_user_log is not None:
                     await self.cur_user_log.set_state(status="Success!")
-                completed_task_labels = format_completed_task_labels(
-                    self.run_plan,
-                    result.completedTasks,
+                # 被项目 pipeline 自己停下的任务照旧算完成，只是另起一行写明被停止
+                for line in completed_result_log_lines(self.run_plan, result):
+                    self._append_log(line)
+                self._record_attempt(
+                    index + 1, result_task_labels(self.run_plan, result), None
                 )
-                self._append_log("MaaFW 任务完成: " + ", ".join(completed_task_labels))
-                self._record_attempt(index + 1, completed_task_labels, None)
             else:
                 if verdict.repair_resource and result.resourceFailure is not None:
                     # 资源包没能加载：原因只在原生 ERR 行里，换成一句人话（取不到才保留
@@ -665,7 +681,7 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
                 self._append_log(message, warning=True)
                 self._record_attempt(
                     index + 1,
-                    format_completed_task_labels(self.run_plan, result.completedTasks),
+                    result_task_labels(self.run_plan, result),
                     message,
                     user_message=result.userMessage,
                     failed_task=result.failedTask,
