@@ -56,6 +56,9 @@ jobs:
                   if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                       raise SystemExit(f"{label} 必须是有效的 HTTP/HTTPS 项目链接")
           PY
+      - name: 提示发布开关
+        if: startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_ENABLED != 'true'
+        run: echo "::notice::仓库变量 PUBLISH_ENABLED 不是 'true'，这次只构建不上传"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: python-distributions
@@ -65,7 +68,8 @@ jobs:
   publish:
     name: 发布到 PyPI
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 保险：仓库变量 PUBLISH_ENABLED 不是 'true' 时只构建不上传，推上去不会误发
+    if: startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment:
       name: pypi
