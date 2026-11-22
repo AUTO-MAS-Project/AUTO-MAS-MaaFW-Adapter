@@ -116,6 +116,7 @@ _routes = APIRouter()
     summary="列出项目目录里外壳（MFAAvalonia / MXU / MFW-PyQt6）保存的配置实例",
     response_model=MaaFWShellInstancesOut,
     status_code=200,
+    openapi_extra={"x-auto-mas-mcp": True},
 )
 async def list_maafw_shell_instances(
     payload: MaaFWShellInstancesIn = Body(...),
@@ -136,6 +137,7 @@ async def list_maafw_shell_instances(
     summary="把选中的外壳配置实例导入成用户",
     response_model=MaaFWShellInstanceImportOut,
     status_code=200,
+    openapi_extra={"x-auto-mas-mcp": True},
 )
 async def import_maafw_shell_instances(
     payload: MaaFWShellInstanceImportIn = Body(...),
