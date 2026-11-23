@@ -33,6 +33,16 @@ from auto_mas_core.host.models_schema import (
     MaaFWShellInstanceImportItem,
     MaaFWShellInstanceItem,
 )
+from auto_mas_core.host.utils import get_logger
+from maafw_adapter_kit.owner_entry import OwnerKeyError, record_payload
+from maafw_adapter_kit.services import (
+    PROJECT_CONTEXT,
+    PROJECT_MANAGED_FIND,
+    PROJECT_VIEW_ENSURE,
+    project_context_request,
+    script_request,
+    view_ensure_request,
+)
 from maafw_interface.interface.loader import (
     MaaFWInterfaceLoadError,
     load_interface_model_cached,
@@ -44,13 +54,9 @@ from maafw_interface.interface.task_config import (
     normalize_snapshot,
 )
 from maafw_native.layout import view_dir
-from maafw_project_update.api.common import (
-    MaaFWApiReply,
-    logger,
-    maafw_effective_root,
-)
-from maafw_project_update.host.embedded_project import view_imported_from
+from maafw_project_update.api.common import MaaFWApiReply
 
+from .services import client
 from .shell_instances import (
     ShellImportPlan,
     ShellInstance,
@@ -62,10 +68,13 @@ from .shell_instances import (
     scan_shell_instances,
 )
 
+#: 端点日志沿用原来记在项目更新端点下的名字
+logger = get_logger("托管管理 API")
+
 INSTANCE_NOT_FOUND = "项目目录里找不到这份配置（可能已在外壳里删除或改名）"
 
 
-def _candidate_roots(script_id: str, script_config: Any) -> list[Path]:
+async def _candidate_roots(script_id: str, script_config: Any) -> list[Path]:
     """按顺序去哪里找外壳配置：先来源目录，再内嵌副本。
 
     外壳把实例存在它自己的目录里，也就是用户选的来源目录（``Info.Path``）。投影不剔
@@ -73,37 +82,44 @@ def _candidate_roots(script_id: str, script_config: Any) -> list[Path]:
     ``config/mxu-*.json``），来源目录不在了、或来源目录里没有外壳配置时拿它兜底。但同组
     共用一份载荷：本托管导入的版本不比组新时，视图挂的是组里别人从**另一个目录**导入的
     那份，``config/`` 里是别人的队列与账号。所以只在视图的载荷正是从本托管的来源目录导入
-    时（:func:`view_imported_from`）才兜底。「复用已有脚本的项目」克隆出来的脚本
-    ``Info.Path`` 沿用源托管的来源目录（与 ``Embedded.*`` 成对继承），走的是同一条路。
-
-    要读载荷清单，在工作线程里调。
+    时（项目服务 ``project_context`` 的 ``view_imported_from_source``，它读载荷清单）才兜底。
+    「复用已有脚本的项目」克隆出来的脚本 ``Info.Path`` 沿用源托管的来源目录（与 ``Embedded.*``
+    成对继承），走的是同一条路。
     """
 
+    reply = await client("外壳配置导入").call(
+        PROJECT_CONTEXT,
+        project_context_request(
+            record_payload(script_id, script_config), with_view_import_check=True
+        ),
+    )
+    if reply.failed:
+        raise RuntimeError(reply.message)
     roots: list[Path] = []
     source = str(script_config.Info.Path or "").strip()
     if source:
         roots.append(Path(source))
-    if view_imported_from(script_id, source):
+    if reply.get("view_imported_from_source"):
         roots.append(view_dir(script_id))
     return roots
 
 
-def _requested_roots(
+async def _requested_roots(
     script_id: str, script_config: Any, path: str | None
 ) -> tuple[list[Path] | None, str]:
     """列表与覆盖共用的「去哪儿找」：给了 ``path`` 就只认那个目录，否则 :func:`_candidate_roots`。
 
     两边必须同一口径：实例 ID 只是外壳里的文件名 / 配置 id，同一份外壳拷两份 ID 就一样，
-    列表从别的目录列出来、覆盖却回默认目录按 ID 找，会悄悄导进另一份配置。要碰盘，在工作
-    线程里调。
+    列表从别的目录列出来、覆盖却回默认目录按 ID 找，会悄悄导进另一份配置。碰盘的那一步在
+    工作线程里做。
     """
 
     if path is not None and path.strip():
         picked = Path(path.strip())
-        if not picked.is_dir():
+        if not await asyncio.to_thread(picked.is_dir):
             return None, f"目录不存在: {picked}"
         return [picked], ""
-    return _candidate_roots(script_id, script_config), ""
+    return await _candidate_roots(script_id, script_config), ""
 
 
 def _scan_first_root(roots: list[Path]) -> tuple[Path | None, list[ShellInstance]]:
@@ -128,18 +144,30 @@ def _interface_name(items: list[Any], raw: str) -> str:
     return raw if raw and any(item.name == raw for item in items) else ""
 
 
-def _family_script_config(script_id: str) -> Any:
+async def _family_script_config(script_id: str) -> Any:
     """外壳配置导入要建账号，拿的是托管的配置对象（这组端点归通用 MFW 自己）。
 
-    先经属主登记确认这是属主已登记的 MFW 托管（认不出时的异常与文案同其它 MFW 端点），认出来就
-    取宿主托管表里的配置对象（插件里不再按宿主的家族类型表二次核对）。
+    先经项目服务 ``managed_find`` 确认这是属主已登记的 MFW 一族托管（M9A、MSS 的也认；认不出时
+    抛的异常类型与文案同原来属主登记那边：id 不对 ``ValueError``、没有这个托管 ``OwnerKeyError``、
+    不归 MFW 一族 ``TypeError``），认出来就取宿主托管表里的配置对象（插件里不再按宿主的家族类型
+    表二次核对）。
     """
 
     import uuid
 
-    from maafw_project_update.host.owners import find_managed
-
-    find_managed(script_id)
+    reply = await client("外壳配置导入").call(
+        PROJECT_MANAGED_FIND, script_request(script_id)
+    )
+    if reply.failed:
+        message = reply.message or ""
+        if reply.code == "invalid_id":
+            raise ValueError(message)
+        if reply.code == "not_found":
+            raise OwnerKeyError(message)
+        if reply.code == "not_managed":
+            raise TypeError(message)
+        # 拿不到服务（项目插件已停用或重载）：原来这里不会失败，文案是那句固定话
+        raise RuntimeError(message)
     return Config.ScriptConfig[uuid.UUID(script_id)]
 
 
@@ -163,9 +191,13 @@ async def _load_import_context(
     ``action`` 只用来写日志（「导入外壳配置实例」/「覆盖外壳配置到用户」）。
     """
 
-    root, error = await maafw_effective_root(script_id, "")
-    if root is None:
-        return MaaFWApiReply.error(400, error)
+    # 有效根：副本缺失时项目服务当场从来源重建（view_ensure 作业）
+    ensured = await client("外壳配置导入").run(
+        PROJECT_VIEW_ENSURE, view_ensure_request(script_id, "")
+    )
+    if ensured.failed:
+        return MaaFWApiReply.error(400, ensured.message or "")
+    root = Path(str(ensured["root"]))
     try:
         interface = await asyncio.to_thread(load_interface_model_cached, root)
         # 跳过项里写 interface 的显示名（按项目语言文件翻过），与预览同一口径
@@ -268,12 +300,10 @@ async def list_shell_instances(
     """
 
     try:
-        script_config = _family_script_config(script_id)
+        script_config = await _family_script_config(script_id)
     except (KeyError, ValueError, TypeError) as exc:
         return MaaFWApiReply.error(400, f"MFW 脚本无效: {exc}")
-    roots, error = await asyncio.to_thread(
-        _requested_roots, script_id, script_config, path
-    )
+    roots, error = await _requested_roots(script_id, script_config, path)
     if roots is None:
         return MaaFWApiReply.error(400, error)
     try:
@@ -348,13 +378,13 @@ async def import_shell_instances(
     """
 
     try:
-        script_config = _family_script_config(script_id)
+        script_config = await _family_script_config(script_id)
     except (KeyError, ValueError, TypeError) as exc:
         return MaaFWApiReply.error(400, f"MFW 脚本无效: {exc}")
     context = await _load_import_context(
         script_id,
         script_config,
-        await asyncio.to_thread(_candidate_roots, script_id, script_config),
+        await _candidate_roots(script_id, script_config),
         action="导入外壳配置实例",
     )
     if isinstance(context, MaaFWApiReply):
@@ -403,7 +433,7 @@ async def apply_shell_instance_to_user(
     """
 
     try:
-        script_config = _family_script_config(script_id)
+        script_config = await _family_script_config(script_id)
     except (KeyError, ValueError, TypeError) as exc:
         return MaaFWApiReply.error(400, f"MFW 脚本无效: {exc}")
 
@@ -411,9 +441,7 @@ async def apply_shell_instance_to_user(
     if user is None:
         return MaaFWApiReply.error(404, "这个账号已经不在这个脚本里了")
 
-    roots, error = await asyncio.to_thread(
-        _requested_roots, script_id, script_config, path
-    )
+    roots, error = await _requested_roots(script_id, script_config, path)
     if roots is None:
         return MaaFWApiReply.error(400, error)
     context = await _load_import_context(

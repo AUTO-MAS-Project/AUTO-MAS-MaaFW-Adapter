@@ -8,6 +8,7 @@
 - 脚本后任务等收尾步骤出错时，这一轮的历史重新记成「异常」、消息写异常原文（只调一次崩溃处理那次修复让历史先按成功存下了）；崩溃处理仍只调一次。
 - 插件 `requires` 改成写全要调的 74 个服务操作名；属主改用新形登记（`owner_register`，每个属主操作一个服务名），不再提供旧的 `maafw.owner.maafw_adapter.v1` 属主入口服务。用户看到的行为不变。
 - 运行前的运行环境自检与每个账号开跑前的运行池路由改经 agent 环境服务（`runtime_check`、`runtime_route`），不再直接导入 agent 环境插件；文案与时机不变。
+- 账号预约、项目口径（自动更新时机、代理、渠道）、复制 / 删除托管、外壳配置导入认托管与补视图改经项目服务（`run_reserve`、`project_context`、`script_cloned_*`、`script_removed_*`、`managed_find`、`view_ensure_*`），不再直接导入项目更新插件；文案与时机不变。
 
 ## 0.2.0
 

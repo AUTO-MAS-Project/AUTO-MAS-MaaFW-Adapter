@@ -74,6 +74,7 @@ from maafw_adapter_kit.backup_archive import (
 from maafw_adapter_kit.default_snapshot import (
     fill_default_task_snapshots,
 )
+from maafw_adapter_kit.owner_entry import record_payload
 from maafw_adapter_kit.project_texts import BENIGN_SKIPS, SKIP_OCCUPIED
 from maafw_adapter_kit.proxy_quota import (
     proxy_times_used_up,
@@ -87,6 +88,8 @@ from maafw_adapter_kit.run_notices import (
 from maafw_adapter_kit.services import (
     AGENT_ENV_RUNTIME_CHECK,
     AGENT_ENV_RUNTIME_ROUTE,
+    PROJECT_CONTEXT,
+    project_context_request,
     runtime_check_request,
 )
 from maafw_adapter_kit.signal_notice import (
@@ -114,10 +117,6 @@ from maafw_project_update.host.project_session import (
     describe_open_failure,
     discover_prefetch,
 )
-from maafw_project_update.host.update_credentials import (
-    AutoUpdateMode,
-    resolve_auto_update_mode,
-)
 
 from .config import MaaFWConfig, MaaFWUserConfig
 from .services import client as service_client
@@ -126,6 +125,9 @@ if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查，运行期不导入 
     from .account_run import MaaFWPluginAutoProxyTask
 
 logger = get_logger("MFW 内置运行")
+
+#: 项目自动更新的时机（项目服务 ``project_context`` 回的 ``auto_update_mode``）。
+AutoUpdateMode = Literal["Off", "BeforeRun", "AfterRun"]
 
 # 整脚本良性跳过的几句话（项目被暂时占着，不是故障）：脚本记「跳过」、发 warning。
 _BENIGN_SKIPS = BENIGN_SKIPS
@@ -402,6 +404,20 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         if reply.failed:
             raise RuntimeError(reply.message)
         return SimpleNamespace(root=Path(reply["root"]), pool_id=reply["pool_id"])
+
+    async def _resolve_auto_update_mode(self) -> AutoUpdateMode:
+        """这个托管的项目自动更新时机（项目服务 ``project_context``，与项目更新自己同一口径）。"""
+
+        assert self.script_config is not None
+        reply = await service_client("项目口径").call(
+            PROJECT_CONTEXT,
+            project_context_request(
+                record_payload(str(self.script_info.script_id), self.script_config)
+            ),
+        )
+        if reply.failed:
+            raise RuntimeError(reply.message)
+        return cast(AutoUpdateMode, reply["auto_update_mode"])
 
     def _build_inner_task(self, route: Any) -> "MaaFWPluginAutoProxyTask":
         """``route`` 是 :meth:`_runtime_pool_route` 的结果（``root``、``pool_id``）。"""
@@ -690,7 +706,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         # 还是得备。两步都在账号任务之外，不计入 ``Run.RunTimeLimit``。
         # 账号全都今日代理次数已满时这一轮谁也不会跑：两步都不做、不联网，账号照常
         # 逐个走运行前检查记「跳过」（判据与 runner_task.check 同一个函数）。
-        self._auto_update_mode = resolve_auto_update_mode(self.script_config)
+        self._auto_update_mode = await self._resolve_auto_update_mode()
         today = proxy_today()
         if all(
             proxy_times_used_up(self.user_config[uid], self.script_config, today)
