@@ -25,7 +25,7 @@
   - `on_script_removed`：删掉这个托管的项目副本（副本记着别的属主时不删），再起一次运行池对账。
 - 声明函数：`game_kind` 按所选控制器收窄游戏类型（Adb 是模拟器，其余是客户端，判断不了返回 `None`）；`desktop_session` 在这次运行会选出的控制器是 Win32 时为真。
 - 停用前：有托管还没收尾时 `teardown_blockers` 给出原因，宿主拒绝停用、重载、卸载。
-- 跨插件调用：经服务调的经 `services.SLOT`（插件启用时绑宿主给的解析器、停用时解，管理器和外壳从槽里现取服务）。`requires` 按 MFW 服务化方案写全 74 个操作名（共用库的常量拼成）。属主登记走项目服务的 `maafw.project.v1.owner_register` / `owner_unregister`（启用、停用时只试一次），本插件提供属主服务 `maafw.owner.maafw_adapter.v1.<操作>` 的 8 个操作（共用库的 `ConfigOwner` + `OwnerServiceMixin`）。其余直接 import 三块服务插件的模块，全部写在函数体内，或者放在只会在函数体内首次导入的模块（`manager`、`account_run`、`shell_api`、`shell_instances`）里。建计划、打码值、视图目录和上面那些文案、运行设置不经服务插件，直接从两块库和共用库取。
+- 跨插件调用：经服务调的经 `services.SLOT`（插件启用时绑宿主给的解析器、停用时解，管理器和外壳从槽里现取服务）。`requires` 按 MFW 服务化方案写全 74 个操作名（共用库的常量拼成）。属主登记走项目服务的 `maafw.project.v1.owner_register` / `owner_unregister`（启用、停用时只试一次），本插件提供属主服务 `maafw.owner.maafw_adapter.v1.<操作>` 的 8 个操作（共用库的 `ConfigOwner` + `OwnerServiceMixin`）。管理器的运行环境自检与运行池路由走 agent 环境服务的 `runtime_check`、`runtime_route`。其余直接 import 三块服务插件的模块，全部写在函数体内，或者放在只会在函数体内首次导入的模块（`manager`、`account_run`、`shell_api`、`shell_instances`）里。建计划、打码值、视图目录和上面那些文案、运行设置不经服务插件，直接从两块库和共用库取。
 - 宿主能力经 `auto_mas_core.host` 的出口取；还没有出口的只剩通知任务基类 `app.core.notify.lifecycle.NotificationTaskBase` 和通知格式 `app.core.notify.formats.maafw`，只在宿主进程里跑。
 
 ## 开发与测试
