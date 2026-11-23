@@ -31,12 +31,25 @@ from typing import Any
 
 from auto_mas_core import Config, ScriptAdapterPlugin, ScriptTypeDecl, TaskMode
 from auto_mas_core.host.utils import get_logger
+from maafw_adapter_kit.owner_entry import (
+    ConfigOwner,
+    OwnerServiceMixin,
+    owner_provides,
+    owner_service_prefix,
+)
+from maafw_adapter_kit.services import (
+    PROJECT_OWNER_REGISTER,
+    PROJECT_OWNER_UNREGISTER,
+    owner_register_request,
+    owner_unregister_request,
+)
 
 from . import expander as _expander
 from . import lifecycle
 from .api import router
 from .config import MaaFWConfig, MaaFWUserConfig
 from .expander import MaaFWExpander, prefetch_check
+from .services import PLUGIN_ID, REQUIRES, SLOT, client
 
 # 同一个开发版 SDK 号码同时出现在让位前后的宿主。仍内置 MFW 的宿主上不加载。
 _builtin = Config.ScriptConfig.entry_types.get("MaaFWConfig")
@@ -57,15 +70,19 @@ if not (
 
 logger = get_logger("MFW 专项插件")
 
-OWNER_NAME = "maafw_adapter"
-OWNER_SERVICE = "maafw.owner.maafw_adapter.v1"
-PROJECT_SERVICE = "maafw.project.v1"
+OWNER_NAME = PLUGIN_ID
+#: 属主服务名前缀（``maafw.owner.maafw_adapter.v1``），8 个操作挂在它下面
+OWNER_SERVICE = owner_service_prefix(OWNER_NAME)
+
+#: 本插件名下托管的属主：项目服务经属主服务现取，按确切类型认领 ``MaaFWConfig``
+OWNER = ConfigOwner(OWNER_NAME, lambda: MaaFWConfig)
 
 
-class Plugin(ScriptAdapterPlugin):
+class Plugin(OwnerServiceMixin, ScriptAdapterPlugin):
     script_type_key = "MaaFW"
-    requires = ("maafw.agent_env.v1", "maafw.runner.v1", PROJECT_SERVICE)
-    provides_services = {OWNER_SERVICE: "owner_entry"}
+    requires = REQUIRES
+    provides_services = owner_provides(OWNER_NAME)
+    owner_entry = OWNER
     api_router = router
     decl = ScriptTypeDecl(
         script_type=MaaFWConfig,
@@ -81,8 +98,6 @@ class Plugin(ScriptAdapterPlugin):
         desktop_session=lifecycle.supports_desktop_session,
     )
 
-    _owner = None
-
     async def pre_enable(self):
         refs = {
             "PlanConfig": Config.PlanConfig,
@@ -93,25 +108,33 @@ class Plugin(ScriptAdapterPlugin):
         MaaFWUserConfig.related_config = refs
 
     async def on_enable(self):
-        from maafw_adapter_kit.owner_entry import BuiltinConfigOwner
-
-        self._owner = BuiltinConfigOwner(OWNER_NAME, lambda: MaaFWConfig)
-        await self.services.require(PROJECT_SERVICE)(
-            "owner.register", name=OWNER_NAME, service=OWNER_SERVICE
-        )
+        # 先绑槽：管理器、外壳从这里现取服务
+        SLOT.bind(self.services)
+        try:
+            # 生命周期钩子里只试一次；登记不上（属主名冲突等）启用失败，同原来直接登记时
+            reply = await client("on_enable").call_once(
+                PROJECT_OWNER_REGISTER,
+                owner_register_request(OWNER_NAME, OWNER_SERVICE),
+            )
+            reply.expect_ok()
+        except BaseException:
+            SLOT.unbind()
+            raise
 
     async def on_disable(self):
-        service = self.services.get(PROJECT_SERVICE)
-        if service is not None:
-            try:
-                await service("owner.unregister", name=OWNER_NAME)
-            except Exception as exc:  # noqa: BLE001 - 停用不因注销失败中断
-                logger.warning(f"MFW 专项注销属主失败：{exc}")
-        self._owner = None
-
-    def owner_entry(self):
-        """属主服务：返回本插件的属主入口对象（项目更新每次现取）。"""
-        return self._owner
+        try:
+            # 项目服务已经不在就不用注销（同原来 services.get 拿不到时跳过）
+            if self.services.get(PROJECT_OWNER_UNREGISTER) is not None:
+                try:
+                    reply = await client("on_disable").call_once(
+                        PROJECT_OWNER_UNREGISTER, owner_unregister_request(OWNER_NAME)
+                    )
+                    if reply.failed:
+                        logger.warning(f"MFW 专项注销属主失败：{reply.message}")
+                except Exception as exc:  # noqa: BLE001 - 停用不因注销失败中断
+                    logger.warning(f"MFW 专项注销属主失败：{exc}")
+        finally:
+            SLOT.unbind()
 
     async def teardown_blockers(self) -> list[str]:
         """有托管还在跑（管理器还没收尾）时拒绝停用、重载、卸载。"""
