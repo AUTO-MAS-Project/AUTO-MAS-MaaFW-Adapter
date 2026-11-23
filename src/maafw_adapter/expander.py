@@ -41,8 +41,26 @@ def active_run_count() -> int:
     return len(_ACTIVE_RUNS)
 
 
+#: 宿主有没有「确认有账号之后再选定游戏」这个钩子（旧宿主上 L2 仍在派发 L3 之前选定）
+_DEFERRED_GAME_SESSION = hasattr(UserExpander, "select_game_session")
+
+
 class MaaFWExpander(UserExpander):
     """整轮交给沿用的脚本级管理器；L3 只做外壳。"""
+
+    #: 由管理器在确认有可运行账号之后选定游戏会话（原来 after_config_lock 那个位置）：没有可运行
+    #: 账号就不占游戏、不排队
+    defer_game_session = True
+
+    _manager: Any = None
+
+    def on_stop_requested(self) -> None:
+        """L2 送出取消之前同步通知：转给管理器（收尾里的运行后更新、环境确认按停止处理）。"""
+
+        manager = self._manager
+        if manager is not None:
+            manager.stopped_manually = True
+            manager._on_finalize_cancel_requested()
 
     async def main_task(self) -> None:
         await self.script_info.set_state(status="运行")
@@ -58,6 +76,10 @@ class MaaFWExpander(UserExpander):
         manager.history = self.history
         manager.context = self.context
         manager.maintenance = False
+        if _DEFERRED_GAME_SESSION:
+            # 拿到托管锁、确认有可运行账号之后由管理器调（同旧专项 lock_script_config 的约定）
+            manager.after_config_lock = self.select_game_session
+        self._manager = manager
         # L2 收尾时复位（app/task/script_expander.py）
         self.script_info._manager_controls_users = True
         _ACTIVE_RUNS.add(self)
@@ -80,6 +102,7 @@ class MaaFWExpander(UserExpander):
                 self._skipped = "跳过"
         finally:
             _ACTIVE_RUNS.discard(self)
+            self._manager = None
             await manager.callbacks.close()
             if self.task_info.mode == TaskMode.AUTO_PROXY:
                 manager.finalize_completion_details(self.script_info)
