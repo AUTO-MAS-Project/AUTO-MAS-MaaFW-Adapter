@@ -52,6 +52,12 @@ from auto_mas_core.host.utils_common_process_scope import (
     current_process_scope,
 )
 from auto_mas_core.host.utils_common_process_session import desktop_process_target
+from maafw_adapter_kit.attempt_ledger import MaaFWAttemptLedger
+from maafw_adapter_kit.device_state import (
+    MaaFWAdbDeviceState,
+    choose_game_package,
+    optional_int,
+)
 from maafw_adapter_kit.option_secrets import (
     DPAPI_SECRET_OPENER,
     open_task_snapshot,
@@ -90,12 +96,51 @@ from maafw_adapter_kit.run_settings import (
     period_limits,
     task_time_limits,
 )
+from maafw_adapter_kit.run_verdict import (
+    VERDICT_SIGNAL,
+    VERDICT_SUCCEEDED,
+    MaaFWWorkstationLocked,
+    judge_attempt,
+)
 from maafw_adapter_kit.services import (
     PROJECT_CONTEXT,
+    PROJECT_REPAIR,
     PROJECT_RUN_RESERVE,
+    RUNNER,
+    RUNNER_ACCOUNT_CLOSE,
+    RUNNER_ACCOUNT_OPEN,
+    RUNNER_DESKTOP_CHECK,
+    RUNNER_DESKTOP_LAUNCH,
+    RUNNER_DESKTOP_QUIT,
+    RUNNER_DEVICE_ADB_CONFIG,
+    RUNNER_DEVICE_ADB_PATH,
+    RUNNER_DEVICE_WIN32_CONFIG,
+    RUNNER_PLAN,
+    RUNNER_PRETASK,
+    RUNNER_PRETASK_KILL,
+    RUNNER_PRETASK_RERUN_CHECK,
+    Operation,
     Reply,
+    ServiceClient,
+    ServiceUnavailable,
+    account_open_request,
+    account_request,
+    desktop_check_request,
+    desktop_launch_request,
+    desktop_quit_request,
+    desktop_spec,
+    device_adb_config_request,
+    device_adb_path_request,
+    device_win32_config_request,
+    event_dispatcher,
+    plan_request,
+    pretask_request,
+    pretask_rerun_check_request,
     project_context_request,
+    release_run_reservation,
+    repair_request,
     script_request,
+    unavailable_message,
 )
 from maafw_adapter_kit.signal_notice import (
     MAINTENANCE_LAST_STATUS,
@@ -127,7 +172,6 @@ from maafw_interface.run_redaction import (
 )
 from maafw_interface.runner.models import (
     SERVER_MAINTENANCE,
-    MaaFWDeviceConfig,
     MaaFWRunPlan,
     MaaFWRunResult,
 )
@@ -163,32 +207,6 @@ from maafw_native.layout import view_dir
 from maafw_native.project_runtime import (
     describe_project_runtime_architecture_mismatch,
 )
-from maafw_project_update.host.project_path import (
-    release_run_reservation,
-)
-from maafw_project_update.host.resource_repair import (
-    MaaFWRepairRequest,
-    MaaFWResourceRepair,
-)
-from maafw_runner.host.attempt_ledger import MaaFWAttemptLedger
-from maafw_runner.host.desktop_game import (
-    MaaFWDesktopGame,
-    MaaFWDesktopGameSpec,
-    describe_desktop_launch_error,
-    desktop_launch_managed,
-)
-from maafw_runner.host.device_config import (
-    MaaFWAdbDeviceState,
-    adb_ready_timeout,
-    build_adb_control_profile,
-    build_adb_device_config,
-    build_win32_device_config,
-    choose_game_package,
-    optional_int,
-    resolve_adb_path,
-    resolve_login_adb_path,
-    resolve_window_handle,
-)
 from maafw_runner.host.host_client import (
     WORKSTATION_LOCKED_MESSAGE,
     open_emulator_for_run,
@@ -196,28 +214,11 @@ from maafw_runner.host.host_client import (
     workstation_lock_reason,
 )
 from maafw_runner.host.plan_run import (
-    MaaFWPlanRun,
     MaaFWPlanRunEvent,
     MaaFWPlanRunLog,
     MaaFWPlanRunPoint,
-    MaaFWPlanRunRecord,
-    MaaFWPlanRunRequest,
-    MaaFWPlanRunStage,
-)
-from maafw_runner.host.pretask_run import (
-    MaaFWPretaskRunner,
-    MaaFWPretaskRunRequest,
-    pretasks_need_rerun,
 )
 from maafw_runner.host.run_record import RUN_RECORD_HISTORY_KEY
-from maafw_runner.host.run_verdict import (
-    VERDICT_SIGNAL,
-    VERDICT_SUCCEEDED,
-    judge_attempt,
-)
-from maafw_runner.host.run_verdict import (
-    MaaFWWorkstationLocked as _MaaFWWorkstationLocked,
-)
 
 from .services import client as service_client
 
@@ -283,6 +284,8 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         self._attempt_title: str | None = None
         self._history_temp = tempfile.TemporaryDirectory(prefix="mas-maafw-run-")
         self._history_saved = False
+        # final_task 里存历史之前写的账号日志先压住（见 final_task），存完再写
+        self._held_publishes: list[Any] | None = None
         self._user_finalized = False
         self._user_teardown_pending = False
         self._notification_screenshots: list[tuple[str, bytes]] = []
@@ -292,9 +295,21 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         # 本账号运行期间的「保持显示开启」请求，见 main_task。
         self._display_hold: Any = None
         self.opened_emulator = False
-        # Win32 桌面游戏（desktop_game）：开没开过、游戏刚启动的时刻、链接拉起的时刻、临时改过的
-        # Unity 分辨率、AttachOnly 兜底关闭的分界都在它身上，跨尝试保留
-        self._desktop = MaaFWDesktopGame(self._on_plan_run_event)
+        # 运行服务的账号句柄（account_open，main_task 一开头开，final_task 最外层关）：Win32 桌面游戏
+        # （开没开过、游戏刚启动的时刻、链接拉起的时刻、临时改过的 Unity 分辨率、AttachOnly 兜底关闭的
+        # 分界）与运行前设置（停止与清理的状态）都在运行服务那边、跨尝试保留。这里只记桌面游戏作业回报的
+        # 开没开过（重试前要不要关、要不要重跑运行前设置）。
+        self._account: str | None = None
+        # 收尾抛出时账号句柄留给随后的 on_crash 关（见 final_task）
+        self._close_account_after_crash = False
+        self._desktop_opened = False
+        # 服务作业的事件（日志、进度点、运行记录、阶段）分派回本账号的日志与记账
+        self._on_service_event = event_dispatcher(
+            log=self._on_service_log,
+            point=self._on_service_point,
+            record=self._on_run_record_event,
+            stage=self._on_service_stage,
+        )
         # 模拟器路径上本轮游戏刚启动的单调时钟时刻（MAS 随模拟器把游戏拉到前台那一刻），据此算
         # 首个任务的最早下发时刻；None 表示游戏早就在跑。桌面路径用 _desktop.started_at。
         self.game_started_at: float | None = None
@@ -302,13 +317,10 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         # Game.WaitTime（加载页和动态标题都一直在动，像素判断分不出两者）。桌面路径始终为假。
         self.game_start_disk_quiet = False
         self.project_lock_key: str | None = None
-        # 正在跑的那一份计划（plan_run）：停止时经它结束 worker
-        self._plan_run: MaaFWPlanRun | None = None
-        # 项目的运行前设置（pretask_run）：跨尝试共用一份，停止与清理的状态要跨尝试保留；
-        # 释放项目预约前要等它那边的进程确认退出
-        self._pretasks = MaaFWPretaskRunner(self._on_plan_run_event)
-        # ADB 地址、路径与控制档案：同一次模拟器启动内只解析一次，关模拟器时清（见
-        # _close_emulator）
+        # 正在跑的那一份计划（运行服务的 plan 作业）：停止时经它结束 worker
+        self._plan_op: Operation | None = None
+        # ADB 地址、路径与控制档案（运行服务 device_adb_config 回的字典）：同一次模拟器启动内只解析
+        # 一次，关模拟器时清（见 _close_emulator）
         self._adb_state = MaaFWAdbDeviceState()
         self.maafw_runtime_pool_root: Path | None = None
         self.maafw_runtime_pool_id: str | None = None
@@ -326,17 +338,51 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         # 本次尝试的原生 ERR 行（plan_run 返回：原生日志副本里的优先，没有就用 worker stdout /
         # stderr 上的）：资源包加载失败时据此说出具体原因（见 resource_failure）。
         self._attempt_native_errors: list[str] = []
-        # 资源包加载失败后的发行包核对（resource_repair）：每个账号每次运行只做一次，正在跑的核对
-        # 任务留给释放项目预约前等；清理过就额外再跑一次（不占重试次数），``_extra_attempts`` 记
-        # 多出来的几次。
-        self._repair = MaaFWResourceRepair(self._append_log)
+        # 资源包加载失败后的发行包核对（项目服务的 repair 作业）：每个账号每次运行只做一次
+        # （``_repair_checked``）；用户停止时还在跑的那个作业交出来、留给交回项目预约时等
+        # （``_repair_op``）；清理过就额外再跑一次（不占重试次数），``_extra_attempts`` 记多出来的几次。
+        self._repair_checked = False
+        self._repair_op: Operation | None = None
         self._extra_attempts = 0
         # 各次尝试的记账（attempt_ledger）：结构化运行记录、尝试结果、history 状态与附件，
         # 键是这次尝试的日志记录 id(cur_user_log)。_run_record 就是它里面的那份运行记录。
         self._ledger = MaaFWAttemptLedger()
         self._run_record = self._ledger.recorder
 
+    async def _open_account(self) -> None:
+        """开运行服务的账号句柄（桌面游戏与运行前设置两个对象在那边建，同原来任务构造时建）。
+
+        ``run_started_at``（AttachOnly 兜底关闭的分界）取此刻：契约里只能在开账号时给（原来在运行前
+        检查通过之后才记，见 README / 交回里的说明）。
+        """
+
+        reply = await service_client("账号句柄").call(
+            RUNNER_ACCOUNT_OPEN,
+            account_open_request(
+                f"automas-script-maafw:{self.script_info.script_id}",
+                self.cur_user_item.name,
+                time.time(),
+            ),
+        )
+        if reply.failed:
+            raise RuntimeError(reply.message)
+        self._account = str(reply["account"])
+
+    async def _close_account(self) -> None:
+        """关账号句柄（总是成功；还有作业时运行服务延后到最后一个作业结束）。"""
+
+        account, self._account = self._account, None
+        if account is None:
+            return
+        reply = await service_client("账号句柄").call(
+            RUNNER_ACCOUNT_CLOSE, account_request(account)
+        )
+        if reply.failed:
+            logger.warning(f"关闭 MFW 运行账号句柄没成功：{reply.message}")
+
     async def check(self) -> str:
+        if self._account is None:
+            await self._open_account()
         # 与管理器筛账号同一判据（proxy_quota）：全员到上限时管理器不做运行前更新
         if proxy_times_used_up(self.cur_user_config, self.script_config, self.curdate):
             await self.cur_user_item.set_state(status="跳过")
@@ -359,8 +405,11 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         try:
             try:
                 # 特调建计划可能提交配置；取消后先等线程结束，不能让它越过 X 锁释放。
+                # 线程里调运行服务的同步操作（desktop_check）：解析器在这里于事件循环上取好，线程里
+                # 每次调用、每次重试都经它现取服务
+                thread_client = self._thread_client()
                 build_task = asyncio.create_task(
-                    asyncio.to_thread(self._load_run_state_for_check)
+                    asyncio.to_thread(self._load_run_state_for_check, thread_client)
                 )
                 try:
                     state = await asyncio.shield(build_task)
@@ -493,8 +542,8 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         await self._mark_run_started()
         await self.prepare()
         await self.cur_user_item.set_state(status="运行")
-        # AttachOnly 兜底关闭的分界：之后才出现的游戏 / 启动器才算本次运行打开的
-        self._desktop.mark_run_started(time.time())
+        # AttachOnly 兜底关闭的分界（之后才出现的游戏 / 启动器才算本次运行打开的）在开账号句柄时
+        # 交给了运行服务（account_open 的 run_started_at）
         logger.info(f"开始代理 MaaFW 账号: {self.cur_user_uid}")
         if self.run_plan is not None:
             selected_preset = str(
@@ -736,14 +785,21 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             and self.run_signal != SERVER_MAINTENANCE
             and not self.stopped_manually,
         )
+        # 收尾一开头专项自己写的账号日志（「已手动停止」）先压住，等运行服务在收尾里第一次发日志、或本次
+        # 历史存完再写进日志记录。账号日志是异步写进记录的：原来收尾里在运行积木真去关游戏、停进程之前
+        # 不让出事件循环，这一行要么随那一刻写进去、要么落在历史之后；收尾改调服务以后每次调用都会
+        # 让出，不压住它就总在关游戏之前进历史
+        self._held_publishes = []
         if self.stopped_manually:
             self._append_log("已手动停止", warning=True)
         # 收尾（含脚本后任务）抛出的异常原样交给生命周期桥，由它调一次 on_crash；
         # 这里再调就会重复记「异常」、重复发错误通知。但历史在下面的 finally 里就存，
         # 等不到 on_crash：先把这次尝试记成异常再存，on_crash 不再重记。
+        crashed = False
         try:
             await self._finalize_user()
         except Exception as error:
+            crashed = True
             with suppress(Exception):
                 await self._mark_user_crashed(error)
             raise
@@ -752,12 +808,22 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
                 if not self._history_saved:
                     await self._save_user_history()
             finally:
+                self._release_held_publishes()
                 try:
                     if self.stopped_manually:
                         # 即使设备关闭或统计中断，也必须把预约交给安全释放检查。
                         await self._release_project_path()
                 finally:
-                    await asyncio.to_thread(self._history_temp.cleanup)
+                    try:
+                        await asyncio.to_thread(self._history_temp.cleanup)
+                    finally:
+                        # 运行服务的账号句柄在最外层关（总是成功；退出确认等作业还在时延后关）。
+                        # 收尾抛出时生命周期桥接着调 on_crash（停运行前设置、关游戏还要用账号），
+                        # 留到 on_crash 最后关
+                        if crashed:
+                            self._close_account_after_crash = True
+                        else:
+                            await self._close_account()
 
     async def _finalize_user(self) -> None:
         if self._user_teardown_pending:
@@ -849,20 +915,25 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             )
         except Exception:
             pass
-        await self._shutdown_runner()
-        await self._close_emulator()
-        await self._close_game_after_run(failed=True)
-        await self._release_project_path()
+        try:
+            await self._shutdown_runner()
+            await self._close_emulator()
+            await self._close_game_after_run(failed=True)
+            await self._release_project_path()
+        finally:
+            if self._close_account_after_crash:
+                self._close_account_after_crash = False
+                await self._close_account()
 
-    def _desktop_spec(self, *, for_close: bool = False) -> MaaFWDesktopGameSpec:
-        """桌面游戏启停用到的配置原值（``desktop_game``），每个调用点现取。
+    def _desktop_spec(self, *, for_close: bool = False) -> dict[str, Any]:
+        """桌面游戏启停用到的配置原值（运行服务桌面游戏操作的 ``spec``），每个调用点现取。
 
         游戏 exe 与启动器来自客户端绑定（``client_executable_path`` / ``client_launcher_path``）：
         DirectExe 下 MAS 启动它，URL / AttachOnly 下只用来认出游戏。``Game.LaunchMode`` 配置
         激活后一定有默认值，这里的兜底只是防御性的。
 
-        ``for_close``：收尾关游戏用。读客户端绑定出错不在这里抛，记进 spec 交给 ``desktop_game``
-        在原来读路径的那一步再抛——没开过游戏时根本不读路径，开过的先关进程再抛。
+        ``for_close``：收尾关游戏用。读客户端绑定出错不在这里抛，原文记进 spec 交给运行服务，在原来
+        读路径的那一步再报——没开过游戏时根本不读路径，开过的先关进程再报。
         """
 
         game_path: Path | None = None
@@ -883,7 +954,7 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
                 raise
             launcher_path_error = exc
         game = self.script_config.Game
-        return MaaFWDesktopGameSpec(
+        return desktop_spec(
             launch_mode=str(game.LaunchMode or "DirectExe").strip(),
             game_path=game_path,
             launcher_path=launcher_path,
@@ -899,8 +970,19 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             launcher_path_error=launcher_path_error,
         )
 
+    @staticmethod
+    def _thread_client() -> ServiceClient:
+        """给工作线程用的客户端（``for_thread``：解析器在事件循环上取好）；槽没绑时退回经槽取的那个，
+        线程里调用时回 ``service_unavailable``。"""
+
+        client = service_client("运行前检查")
+        try:
+            return client.for_thread()
+        except ServiceUnavailable:
+            return client
+
     def _load_run_state_for_check(
-        self,
+        self, thread_client: ServiceClient
     ) -> tuple[MaaFWInterface, MaaFWRunPlan, MaaFWRunPlan, str | None]:
         interface_model = MaaFWInterfaceService().load(self.project_path)
         base_run_plan = self._build_run_plan(interface_model)
@@ -926,9 +1008,14 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             # 在拉起游戏之前就报。
             game_path_error = WIN32_NO_WINDOW_RULES_MESSAGE
         elif run_plan.tasks and run_plan.controllerType == "Win32":
-            spec = self._desktop_spec()
-            if desktop_launch_managed(spec):
-                game_path_error = describe_desktop_launch_error(spec)
+            # MAS 管不管启动游戏、管的话缺什么配置（运行服务的同步操作 desktop_check，读盘）
+            checked = thread_client.call_sync(
+                RUNNER_DESKTOP_CHECK, desktop_check_request(self._desktop_spec())
+            )
+            if checked.failed:
+                raise RuntimeError(checked.message)
+            if checked.get("managed"):
+                game_path_error = checked.get("error")
         return interface_model, base_run_plan, run_plan, game_path_error
 
     def _build_run_plan(
@@ -1010,63 +1097,84 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         self,
         plan: MaaFWRunPlan,
         interface_model: MaaFWInterface,
-    ) -> MaaFWDeviceConfig:
-        """取脚本配置与模拟器入口，交给 ``device_config`` 换算成设备配置。
+    ) -> dict[str, Any]:
+        """取脚本配置与模拟器入口，交给运行服务的 ``device_*`` 操作换算成设备配置（字典）。
 
         这里只做三件事：取配置原值、管 ADB 缓存（``_adb_state``）、在中间调游戏更新与
-        运行前登录钩子。
+        运行前登录钩子。操作回的日志按发生先后写进账号日志；失败按 §2.2 抛同一句话。
         """
+        runner = service_client("设备配置")
         if plan.controllerType == "Adb":
             state = self._adb_state
             address, device_info = await self._resolve_adb_address()
-            if state.adb_path is None:
-                state.adb_path = await resolve_adb_path(
-                    self.emulator_manager,
-                    game_device_id(self.script_config),
-                    configured_path=self.script_config.Device.AdbPath,
-                    device_info=device_info,
-                    log=self._append_log,
-                )
+            emulator_id = str(game_target_id(self.script_config) or "")
+            device_uid = game_device_id(self.script_config)
             # 通用 MaaFW 没有运行前登录钩子，不向 Toolkit 补找 adb。
-            adb_path = await resolve_login_adb_path(
-                address,
-                state.adb_path,
-                ask_toolkit=False,
-                log=self._append_log,
-            )
-            if state.profile is None:
-                state.profile = await build_adb_control_profile(
-                    self.emulator_manager,
-                    target_id=game_target_id(self.script_config),
-                    device_uid=game_device_id(self.script_config),
-                    log=self._append_log,
+            paths = self._dispatched(
+                await runner.call(
+                    RUNNER_DEVICE_ADB_PATH,
+                    device_adb_path_request(
+                        emulator_id=emulator_id,
+                        device_uid=device_uid,
+                        configured_path=self.script_config.Device.AdbPath,
+                        device_title=getattr(device_info, "title", None),
+                        address=address,
+                        host_adb_path=state.adb_path,
+                        ask_toolkit="never",
+                    ),
                 )
-            return build_adb_device_config(
-                address=address,
-                adb_path=adb_path,
-                profile=state.profile,
-                device_info=device_info,
-                configured_screencap_methods=self.script_config.Device.AdbScreencapMethods,
-                configured_input_methods=self.script_config.Device.AdbInputMethods,
-                ready_timeout=adb_ready_timeout(self.emulator_manager),
             )
+            state.adb_path = paths.get("host_adb_path")
+            configured = self._dispatched(
+                await runner.call(
+                    RUNNER_DEVICE_ADB_CONFIG,
+                    device_adb_config_request(
+                        emulator_id=emulator_id,
+                        target_id=emulator_id,
+                        device_uid=device_uid,
+                        address=address,
+                        adb_path=paths.get("adb_path"),
+                        profile=state.profile,
+                        process_id=getattr(device_info, "process_id", None),
+                        process_started_at=getattr(
+                            device_info, "process_started_at", None
+                        ),
+                        configured_screencap_methods=self.script_config.Device.AdbScreencapMethods,
+                        configured_input_methods=self.script_config.Device.AdbInputMethods,
+                    ),
+                )
+            )
+            state.profile = dict(configured["profile"])
+            return dict(configured["device_config"])
 
         if plan.controllerType == "Win32":
             controller = find_controller(interface_model, plan.controllerName)
             device = self.script_config.Device
-            hwnd = await resolve_window_handle(
-                controller, device.HWnd, log=self._append_log
+            configured = self._dispatched(
+                await runner.call(
+                    RUNNER_DEVICE_WIN32_CONFIG,
+                    device_win32_config_request(
+                        controller=controller,
+                        configured_hwnd=device.HWnd,
+                        configured_screencap_method=device.Win32ScreencapMethod,
+                        configured_mouse_method=device.Win32MouseMethod,
+                        configured_keyboard_method=device.Win32KeyboardMethod,
+                    ),
+                )
             )
-            return build_win32_device_config(
-                controller,
-                hwnd,
-                configured_screencap_method=device.Win32ScreencapMethod,
-                configured_mouse_method=device.Win32MouseMethod,
-                configured_keyboard_method=device.Win32KeyboardMethod,
-                log=self._append_log,
-            )
+            return dict(configured["device_config"])
 
         raise RuntimeError(f"当前仅支持 Adb/Win32 controller: {plan.controllerType}")
+
+    def _dispatched(self, reply: Reply) -> Reply:
+        """短操作回的 ``events``（失败时在 ``detail`` 里）按先后写进账号日志；失败按 §2.2 抛同一句话
+        （``ServiceFailure``，``str()`` 是原文）。"""
+
+        events = reply.get("events") if reply.ok else reply.detail.get("events")
+        for event in events or ():
+            if isinstance(event, Mapping):
+                self._on_service_event(event)
+        return reply.expect_ok()
 
     async def _resolve_adb_address(self) -> tuple[str, DeviceInfo | None]:
         state = self._adb_state
@@ -1110,8 +1218,13 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             self.emulator_manager, game_device_id(self.script_config)
         )
 
-    async def _run_maafw(self, device_config: MaaFWDeviceConfig) -> MaaFWRunResult:
-        """取配置、组装入参，交给 ``plan_run`` 跑这份计划；事件转成账号日志、运行记录与进度点。"""
+    async def _run_maafw(self, device_config: Mapping[str, Any]) -> MaaFWRunResult:
+        """取配置、组装入参，交给运行服务的 ``plan_*`` 跑这份计划；事件转成账号日志、运行记录与进度点。
+
+        失败（``run_timeout``、``task_deadline_expired``、``run_failed``、提供方没了）抛
+        ``ServiceFailure``（``str()`` 是原文，判定按 ``code``）；被停时按 null 族的规则等作业收完再抛取消。
+        附件、原生报错行与 agent 命令计划在成功、失败、被停时都从结果里取。
+        """
 
         plan = self.run_plan
         if plan is None:
@@ -1127,7 +1240,17 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         proxy_url = (await self._project_context()).get("proxy_url")
         secrets = self._secret_log_variants()
         profile = self._adb_state.profile
-        request = MaaFWPlanRunRequest(
+        project_log_secrets = project_log_secret_variants(
+            secrets,
+            script_task_snapshots(self.script_config),
+            self.interface_model,
+            DPAPI_SECRET_OPENER,
+        )
+        redaction_notice = self._log_redaction_notice()
+        extra_env = await self._script_adb_env()
+        win32 = plan.controllerType == "Win32"
+        request = plan_request(
+            account=self._require_account(),
             project_path=self.project_path,
             plan=plan,
             device_config=device_config,
@@ -1141,49 +1264,52 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             task_deadlines=task_deadlines,
             loop_guard=loop_guard(self._loop_guard_raw()),
             run_secrets=secrets,
-            project_log_secrets=project_log_secret_variants(
-                secrets,
-                script_task_snapshots(self.script_config),
-                self.interface_model,
-                DPAPI_SECRET_OPENER,
-            ),
-            redaction_notice=self._log_redaction_notice(),
-            # 同一账号运行里只走一条路：Win32 是桌面游戏刚启动的时刻，ADB 是随模拟器冷启动的时刻
-            game_started_at=(
-                self._desktop.started_at
-                if plan.controllerType == "Win32"
-                else self.game_started_at
-            ),
+            project_log_secrets=project_log_secrets,
+            redaction_notice=redaction_notice,
+            # 同一账号运行里只走一条路：Win32 是桌面游戏刚启动的时刻（运行服务账号里记着），
+            # ADB 是随模拟器冷启动的时刻
+            game_start_source="desktop" if win32 else "given",
+            game_started_at=None if win32 else self.game_started_at,
             game_start_disk_quiet=self.game_start_disk_quiet,
             game_wait_seconds=self.script_config.Game.WaitTime,
             # worker 的 import_paths 不传：由运行积木按四个包所在目录补（worker_import_paths）
             proxy_url=proxy_url,
             agent_plans=self._worker_agent_plans,
-            extra_env=await self._script_adb_env(),
-            desktop=desktop_process_target.get(),
-            avd_emulator=(
-                self.emulator_manager
-                if profile is not None and profile.emulator_type == "avd"
+            extra_env=extra_env,
+            # 桌面分身目标由运行服务在这次调用里读（current ContextVar）；ModAVD 给模拟器 id
+            avd_emulator_id=(
+                str(game_target_id(self.script_config) or "")
+                if profile is not None and profile.get("emulator_type") == "avd"
                 else None
             ),
         )
-        run = MaaFWPlanRun(request, self._on_plan_run_event)
-        self._plan_run = run
         attempt_key = id(self.cur_user_log)
-        try:
-            outcome = await run.run()
-        finally:
-            if self._plan_run is run:
-                self._plan_run = None
-            # 附件、原生报错行与 agent 命令计划在运行抛异常时同样要留下
-            if run.attachments:
-                self._ledger.add_attachments(attempt_key, run.attachments)
-            self._attempt_native_errors = list(run.native_errors)
+
+        def take_extras(result: Mapping[str, Any]) -> None:
+            # 附件、原生报错行与 agent 命令计划在运行失败、被停时同样要留下（失败时在 detail 里）
+            extras = result if result.get("ok") else result.get("detail") or {}
+            attachments = extras.get("attachments") or []
+            if attachments:
+                self._ledger.add_attachments(attempt_key, attachments)
+            self._attempt_native_errors = list(extras.get("native_errors") or [])
             # 同一账号这一轮只认第一次借环境时算出的 agent 命令计划，重试沿用
-            if self._worker_agent_plans is None and run.agent_plans is not None:
-                self._worker_agent_plans = run.agent_plans
-        result = outcome.result
-        return result
+            plans = extras.get("agent_plans")
+            if self._worker_agent_plans is None and plans is not None:
+                self._worker_agent_plans = list(plans)
+
+        self._attempt_native_errors = []
+        operation = service_client("跑计划").operation(
+            RUNNER_PLAN, on_event=self._on_service_event, on_result=take_extras
+        )
+        self._plan_op = operation
+        try:
+            reply = await operation.run(request)
+        finally:
+            if self._plan_op is operation:
+                self._plan_op = None
+        if reply.failed:
+            raise reply.failure()
+        return MaaFWRunResult.model_validate(reply["result"])
 
     def _loop_guard_raw(self) -> Any:
         """``Run.LoopGuard`` 的原值（原地打转检测，配置默认开）；读不到按关。"""
@@ -1194,16 +1320,33 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             return None
 
     def _on_plan_run_event(self, event: MaaFWPlanRunEvent) -> None:
-        """``plan_run`` 与 ``pretask_run`` 的事件出口：账号日志、进度点（以本任务为 owner）、运行记录。"""
+        """开模拟器（``host_client.open_emulator_for_run``）的事件出口：账号日志、进度点（以本任务为 owner）。"""
 
         if isinstance(event, MaaFWPlanRunLog):
             self._append_log(event.message, warning=event.warning)
         elif isinstance(event, MaaFWPlanRunPoint):
             point(self, event.stage, state=event.state, key=event.key)
-        elif isinstance(event, MaaFWPlanRunRecord):
-            self._on_run_record_event(event.data)
-        elif isinstance(event, MaaFWPlanRunStage):
-            self._ledger.mark_stage(event.stage, event.ok)
+
+    def _on_service_log(
+        self, message: str, *, warning: bool = False, at: float | None = None
+    ) -> None:
+        # 收尾里压住的那几行（见 final_task）：运行服务开始在收尾里写日志了，原来这时早已让出过
+        # 事件循环、它们已经写进去了，先放出来再写这一行（先后不变）
+        self._release_held_publishes()
+        self._append_log(message, warning=warning, at=at)
+
+    def _on_service_point(self, stage: Any, *, state: str, key: str) -> None:
+        point(self, stage, state=state, key=key)
+
+    def _on_service_stage(self, stage: Any, ok: bool | None) -> None:
+        self._ledger.mark_stage(stage, ok)
+
+    def _require_account(self) -> str:
+        """运行服务的账号句柄（main_task 一开头就开了）；没开成时按提供方没了说那句固定话。"""
+
+        if self._account is None:
+            raise RuntimeError(unavailable_message(RUNNER))
+        return self._account
 
     def _run_password_values(self) -> list[str]:
         """本次运行要打码的密码值（``run_redaction.run_secret_values``）：从配置里取出快照原值，
@@ -1229,45 +1372,87 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         return log_redaction_notice(self.interface_model, self._run_password_values())
 
     async def _shutdown_runner(self) -> None:
-        await self._pretasks.stop()
+        if self._account is not None:
+            # 运行前设置的清理（运行服务 pretask_kill，没有取消点：被取消时脱手、提供方照样做完）
+            reply = await service_client("运行前设置").run(
+                RUNNER_PRETASK_KILL,
+                account_request(self._account),
+                on_event=self._on_service_event,
+            )
+            if reply.failed:
+                logger.warning(f"MFW 运行前设置清理没完成：{reply.message}")
         await self._terminate_runner_process()
 
-    async def _pretasks_need_rerun(self, client_reset: bool) -> bool:
-        """重试前要不要再跑一遍已经成功过的运行前设置（判据见 ``pretask_run.pretasks_need_rerun``）。"""
+    @staticmethod
+    def _interface_controller(
+        interface: MaaFWInterface | None, name: str | None
+    ) -> Any:
+        """interface 里叫 ``name`` 的控制器；没加载或找不到时 None（运行服务在原来那一步报找不到）。"""
 
-        return await pretasks_need_rerun(
-            self.run_plan,
-            self.interface_model,
-            client_reset=client_reset,
-            configured_hwnd=self.script_config.Device.HWnd,
-            emit=self._on_plan_run_event,
+        if interface is None or not name:
+            return None
+        return next((item for item in interface.controller if item.name == name), None)
+
+    def _controller_fields(self) -> dict[str, Any]:
+        """桌面游戏与重跑判定要的控制器：选中的那个（模型）、名字、interface 加载没有。"""
+
+        plan = self.run_plan
+        name = plan.controllerName if plan is not None else None
+        return {
+            "controller": self._interface_controller(self.interface_model, name),
+            "controller_name": name,
+            "interface_loaded": self.interface_model is not None,
+        }
+
+    async def _pretasks_need_rerun(self, client_reset: bool) -> bool:
+        """重试前要不要再跑一遍已经成功过的运行前设置（运行服务 ``pretask_rerun_check``）。"""
+
+        plan = self.run_plan
+        fields = self._controller_fields()
+        reply = await service_client("运行前设置").call(
+            RUNNER_PRETASK_RERUN_CHECK,
+            pretask_rerun_check_request(
+                has_pretasks=bool(plan.pretasks) if plan is not None else False,
+                client_reset=client_reset,
+                controller_type=plan.controllerType if plan is not None else None,
+                interface_loaded=fields["interface_loaded"],
+                controller_name=fields["controller_name"],
+                controller=fields["controller"],
+                configured_hwnd=self.script_config.Device.HWnd,
+            ),
         )
+        return bool(self._dispatched(reply).get("rerun"))
 
     async def _run_pretasks(self) -> None:
-        """取配置、组装入参，交给 ``pretask_run`` 跑这次尝试的运行前设置。"""
+        """取配置、组装入参，交给运行服务的 ``pretask_*`` 跑这次尝试的运行前设置。"""
 
         if self.run_plan is None:
             raise RuntimeError("MaaFW 运行计划尚未初始化")
         # ModAVD 实例：pretask 若用 adb，也走脚本专用 server（同 worker）
         adb_env = await self._script_adb_env()
-        await self._pretasks.run(
-            MaaFWPretaskRunRequest(
+        reply = await service_client("运行前设置").run(
+            RUNNER_PRETASK,
+            pretask_request(
+                account=self._require_account(),
                 project_path=self.run_plan.path,
                 pretasks=self.run_plan.pretasks,
                 run_time_limit_minutes=self.script_config.Run.RunTimeLimit,
                 plan_env=self.run_plan.piEnv,
                 extra_env=adb_env,
                 secrets=self._secret_log_variants(),
-                desktop=desktop_process_target.get(),
-            )
+            ),
+            on_event=self._on_service_event,
         )
+        if reply.failed:
+            # pretask_failed（判定按它不加前缀、记运行前设置失败）、run_failed、提供方没了
+            raise reply.failure()
 
     async def _terminate_runner_process(self) -> None:
-        """停止时结束正在跑的 worker（经 ``plan_run`` 的停止入口；没有在跑的就什么都不做）。"""
+        """停止时结束正在跑的 worker（运行服务 ``plan_stop``；没有在跑的就什么都不做）。"""
 
-        run = self._plan_run
-        if run is not None:
-            await run.stop()
+        operation = self._plan_op
+        if operation is not None:
+            operation.stop()
 
     def _period_limits(self) -> MaaFWPeriodLimits:
         run = self.script_config.Run
@@ -1351,15 +1536,34 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             self.game_start_disk_quiet = False
 
     async def _ensure_desktop_game_started(self) -> None:
-        """Win32 场景下由 MAS 负责启动/激活桌面游戏客户端（``desktop_game``），供后续窗口解析使用。"""
+        """Win32 场景下由 MAS 负责启动/激活桌面游戏客户端（运行服务 ``desktop_launch_*``），供后续窗口
+        解析使用。桌面分身目标由运行服务在这次调用里读。"""
         if self.run_plan is None or self.run_plan.controllerType != "Win32":
             return
-        await self._desktop.ensure_started(
-            self._desktop_spec(),
-            interface=self.interface_model,
-            controller_name=self.run_plan.controllerName,
-            desktop=desktop_process_target.get(),
+        fields = self._controller_fields()
+        request = desktop_launch_request(
+            self._require_account(), self._desktop_spec(), fields["controller"]
         )
+        request["controller_name"] = fields["controller_name"]
+        request["interface_loaded"] = fields["interface_loaded"]
+        reply = await service_client("桌面游戏").run(
+            RUNNER_DESKTOP_LAUNCH,
+            request,
+            on_event=self._on_service_event,
+            on_result=self._take_desktop_state,
+        )
+        if reply.failed:
+            raise reply.failure()
+
+    def _take_desktop_state(self, result: Mapping[str, Any]) -> None:
+        """桌面游戏作业终态里的 ``desktop``（成功在顶层、失败在 ``detail``）：开没开过。"""
+
+        desktop = result.get("desktop")
+        if not isinstance(desktop, Mapping):
+            detail = result.get("detail")
+            desktop = detail.get("desktop") if isinstance(detail, Mapping) else None
+        if isinstance(desktop, Mapping):
+            self._desktop_opened = bool(desktop.get("opened"))
 
     def _attempt_limit(self) -> int:
         """本账号这次运行最多跑几次：``Run.RunTimesLimit``，加上清理残留后额外的重跑。"""
@@ -1370,19 +1574,35 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         """资源包加载失败之后与发行包核对（``resource_repair``）：视图换了载荷就返回下一次的
         （开头那行, 称呼）、该立刻再跑一次；其余情况它写一行停止原因、返回 None。"""
 
-        # 跟随来源、渠道、代理、外壳提示都按项目服务的口径（project_context）
-        context = await self._project_context()
-        return await self._repair.run(
-            kind,
-            MaaFWRepairRequest(
-                script_id=str(self.script_info.script_id),
-                script_name=str(self.script_info.name or ""),
-                follow_source=bool(context.get("follow_source")),
-                channel=context.get("channel"),
-                proxy_url=context.get("proxy_url"),
-                shell_hint=context.get("shell_hint"),
-            ),
+        # 项目服务的 repair 作业：跟随来源、渠道、代理、外壳提示按它的口径从托管记录算；每次运行只
+        # 核对一次（already_checked）。用户停止时作业不收（取消规则 4）：交出来，交回项目预约时等它
+        operation = service_client("资源包修复").operation(
+            PROJECT_REPAIR, on_event=self._on_service_event
         )
+        try:
+            reply = await operation.run(
+                repair_request(
+                    script_id=str(self.script_info.script_id),
+                    script_name=str(self.script_info.name or ""),
+                    record=record_payload(
+                        str(self.script_info.script_id), self.script_config
+                    ),
+                    kind=kind,
+                    already_checked=self._repair_checked,
+                )
+            )
+        except asyncio.CancelledError:
+            if operation.handle is not None:
+                self._repair_op = operation
+            raise
+        if reply.failed:
+            raise reply.failure()
+        if reply.get("checked_now"):
+            self._repair_checked = True
+        rerun = reply.get("rerun")
+        if isinstance(rerun, Mapping):
+            return str(rerun["line"]), str(rerun["title"])
+        return None
 
     async def _reset_client_for_retry(self, attempt: int) -> tuple[bool, bool]:
         """重试前关掉 MAS 自己起的客户端，返回（是否全部关成, 是否已不在）。
@@ -1391,9 +1611,9 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         关的时候报错，opened_* 也已清掉、下一轮会重新拉起，运行前设置同样要重来。
         """
 
-        had_client = self._desktop.opened or self.opened_emulator
+        had_client = self._desktop_opened or self.opened_emulator
         restarted = await self._restart_client_before_retry(attempt)
-        still_open = self._desktop.opened or self.opened_emulator
+        still_open = self._desktop_opened or self.opened_emulator
         return restarted, bool(had_client and not still_open)
 
     async def _restart_client_before_retry(self, attempt: int) -> bool:
@@ -1409,7 +1629,7 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
 
         if attempt >= self._attempt_limit():
             return False
-        if not self._desktop.opened and not self.opened_emulator:
+        if not self._desktop_opened and not self.opened_emulator:
             return False
         # 只在真正要重启 MAS 自己启动的客户端时撤销预下载资格。
         # 等待 FluxDown/HTTPX 确认停止后才关闭游戏或模拟器；AttachOnly、
@@ -1546,27 +1766,59 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             return SIGNAL_USER_MESSAGES.get(self.run_signal, self.run_signal)
         return None
 
-    async def _close_game(self) -> bool:
-        """关闭由 MAS 启动的游戏，返回是否关成（本来就没开过算关成）；见 ``desktop_game.close``。"""
+    async def _quit_game(self, request: dict[str, Any]) -> Reply:
+        """运行服务的 ``desktop_quit_*``（没有取消点：被取消时脱手、提供方照样关完、恢复分辨率）。
 
-        return await self._desktop.close(self._desktop_spec(for_close=True))
-
-    async def _close_game_after_run(self, *, failed: bool) -> None:
-        """最终收尾关游戏：MAS 启动的照常关，AttachOnly 再按 ``Game.CloseMode`` 兜底。
-
-        ``failed`` 为真表示本次运行没正常完成（失败、超时、停止、``on_crash``）。重试之间
-        走的是 ``_restart_client_before_retry``，不经这里，AttachOnly 下不关。
+        失败（读不出客户端路径的原文、关游戏时出错）按 §2.2 抛同一句话；开没开过照结果更新。
         """
 
+        reply = await service_client("桌面游戏").run(
+            RUNNER_DESKTOP_QUIT,
+            request,
+            on_event=self._on_service_event,
+            on_result=self._take_desktop_state,
+        )
+        if reply.failed:
+            raise RuntimeError(reply.message)
+        return reply
+
+    async def _close_game(self) -> bool:
+        """关闭由 MAS 启动的游戏，返回是否关成（本来就没开过算关成）；运行服务 ``desktop_quit``
+        （``retry``）。"""
+
+        if self._account is None:
+            return True
+        reply = await self._quit_game(
+            desktop_quit_request(
+                self._account, self._desktop_spec(for_close=True), mode="retry"
+            )
+        )
+        return bool(reply.get("closed"))
+
+    async def _close_game_after_run(self, *, failed: bool) -> None:
+        """最终收尾关游戏：MAS 启动的照常关，AttachOnly 再按 ``Game.CloseMode`` 兜底（运行服务
+        ``desktop_quit``，``final``）。
+
+        ``failed`` 为真表示本次运行没正常完成（失败、超时、停止、``on_crash``）。重试之间
+        走的是 ``_restart_client_before_retry``，不经这里，AttachOnly 下不关。桌面分身目标由运行
+        服务在这次调用里读。
+        """
+
+        if self._account is None:
+            return
         plan = self.run_plan
-        await self._desktop.close_after_run(
+        fields = self._controller_fields()
+        request = desktop_quit_request(
+            self._account,
             self._desktop_spec(for_close=True),
-            interface=self.interface_model,
-            controller_name=plan.controllerName if plan is not None else None,
+            mode="final",
+            controller=fields["controller"],
             controller_type=plan.controllerType if plan is not None else None,
             failed=failed,
-            desktop=desktop_process_target.get(),
         )
+        request["controller_name"] = fields["controller_name"]
+        request["interface_loaded"] = fields["interface_loaded"]
+        await self._quit_game(request)
 
     async def _try_enter_project_path(self) -> str | None:
         """拿本账号的项目预约（项目服务 ``run_reserve``）。拿到返回 None；被占着时返回原因
@@ -1597,17 +1849,21 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         return reply
 
     async def _release_project_path(self) -> None:
-        """交回本账号的项目预约（``project_path.release_run_reservation``）：停止时等作用域收尾、
-        运行前设置的进程确认退出、资源包核对做完再放。"""
+        """交回本账号的项目预约（共用库 ``release_run_reservation``）：停止时等作用域收尾、
+        运行前设置的进程确认退出（运行服务 ``pretask_exit_watch``）、资源包核对做完（项目服务
+        ``run_release`` 等修复作业）再放。"""
 
         if self.project_lock_key is None:
             return
         key, self.project_lock_key = self.project_lock_key, None
+        repair, self._repair_op = self._repair_op, None
         await release_run_reservation(
+            service_client("交回预约"),
             key,
             scope=current_process_scope.get(),
-            pretask_exit_confirmation=self._pretasks.exit_confirmation,
-            pending=self._repair.task,
+            account=self._account,
+            repair=repair,
+            on_repair_event=self._on_service_event,
         )
 
     def _ensure_display_hold(self) -> None:
@@ -1635,7 +1891,7 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             desktop_process_target.get(),
         )
         if reason is not None:
-            raise _MaaFWWorkstationLocked(WORKSTATION_LOCKED_MESSAGE)
+            raise MaaFWWorkstationLocked(WORKSTATION_LOCKED_MESSAGE)
 
     def _release_display_hold(self) -> None:
         hold, self._display_hold = self._display_hold, None
@@ -1657,6 +1913,18 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         await self.signal_tracker.freeze_user_screenshots(str(self.cur_user_uid))
 
     async def _save_user_history(self) -> None:
+        try:
+            await self._save_user_history_records()
+        finally:
+            # 历史存完（或这一轮不存）：收尾里压住的账号日志接着写
+            self._release_held_publishes()
+
+    def _release_held_publishes(self) -> None:
+        held, self._held_publishes = self._held_publishes, None
+        for publish in held or ():
+            self.callbacks.submit(publish())
+
+    async def _save_user_history_records(self) -> None:
         if self._history_saved:
             return
         self._history_saved = True
@@ -1691,12 +1959,13 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             )
             if run_record is not None:
                 record.data[RUN_RECORD_HISTORY_KEY] = run_record
+            # 附件是运行服务结果里的字典（路径是字符串）
             record.attachments.extend(
                 HistoryAttachmentInput(
-                    path=item.path,
-                    kind=item.kind,
-                    role=item.role,
-                    display_name=item.display_name,
+                    path=Path(str(item["path"])),
+                    kind=item["kind"],
+                    role=item["role"],
+                    display_name=item["display_name"],
                 )
                 for item in self._ledger.attachments(id(log_item))
             )
@@ -1871,17 +2140,26 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         except Exception as exc:
             logger.warning(f"MaaFW 插件用户通知发送失败: {exc}")
 
-    def _append_log(self, message: str, *, warning: bool = False) -> None:
+    def _append_log(
+        self, message: str, *, warning: bool = False, at: float | None = None
+    ) -> None:
+        """记一行账号日志。``at``：服务作业发出这一行的时刻（事件的 ``at``），时间戳按它排，轮询晚到的
+        那一点不改时间戳；本地写的行不给，按此刻。"""
+
         # 失败类的账号日志按 WARNING 进 app.log，事后按级别筛得出来
         (logger.warning if warning else logger.info)(message)
+        line = format_user_log_line(message, at=at)
         if self.cur_user_log is None:
-            self._pending_user_log.append(format_user_log_line(message))
+            self._pending_user_log.append(line)
             return
         record = self.cur_user_log
 
         async def publish():
-            await record.append_content(format_user_log_line(message))
+            await record.append_content(line)
             content = record.content
             await self.script_info.set_log("".join(content))
 
+        if self._held_publishes is not None:
+            self._held_publishes.append(publish)
+            return
         self.callbacks.submit(publish())

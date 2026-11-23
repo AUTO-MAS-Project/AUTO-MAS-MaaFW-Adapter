@@ -10,6 +10,7 @@
 - 运行前的运行环境自检与每个账号开跑前的运行池路由改经 agent 环境服务（`runtime_check`、`runtime_route`），不再直接导入 agent 环境插件；文案与时机不变。
 - 账号预约、项目口径（自动更新时机、代理、渠道）、复制 / 删除托管、外壳配置导入认托管与补视图改经项目服务（`run_reserve`、`project_context`、`script_cloned_*`、`script_removed_*`、`managed_find`、`view_ensure_*`），不再直接导入项目更新插件；文案与时机不变。
 - 打开项目、运行前 / 后更新、运行环境确认、收尾项目、队列预下载与发现更新改经项目服务（`open_*` 经共用库 `open_project`，带这一轮开始的时刻；`confirm_*`、`finish_*`、`update_*`、`prefetch_*`、`discover_*`），收尾期间点停止照旧让在途的更新 / 环境确认停下；文案与时机不变。
+- 账号运行改经运行服务：一个账号开一个运行账号句柄（`account_open`，收尾最外层 `account_close`），桌面游戏的检查 / 拉起 / 关闭、设备配置、运行前设置（含重跑判定、清理）、跑计划都改调 `desktop_*`、`device_*`、`pretask_*`、`plan_*`；资源包修复改调项目服务 `repair_*`，交回项目预约改经共用库 `release_run_reservation`（停止后等运行前设置确认退出、修复作业做完再放）。判定、尝试记账与 ADB 设备缓存同时换成专项共用库的（运行服务的失败按 code 判）。文案与时机不变。
 
 ## 0.2.0
 
