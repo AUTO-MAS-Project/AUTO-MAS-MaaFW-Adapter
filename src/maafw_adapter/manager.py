@@ -18,17 +18,13 @@
 
 """MaaFW 内置运行任务管理器。
 
-MAS 在自己的 worker 子进程内加载项目的 MaaFramework 直接驱动，不启动项目
-自带的 UI 外壳；编排实现在 ``tools/embedded/runner_task.py``。这是
-``task_manager`` 对 MaaFW 脚本的唯一分派目标。
+MAS 在 MFW 运行插件起的 worker 子进程内加载项目的 MaaFramework 直接驱动，不启动项目
+自带的 UI 外壳；每个账号的编排在 ``account_run``（账号流程在 check() 通过后才延迟导入）。
 
-``tools/embedded.runner_task`` 会经 runner 包 import ``maa``（导入即打开 DLL），
-因此本模块**只在 check() 通过后才延迟导入它**，让不跑 MaaFW 的进程不承担
-这个代价。
-
-打开项目（拿预约、补视图）、运行前更新与运行环境确认、收尾项目、队列预下载都在
-``tools/embedded/project_session.py``：这里只取配置、组装普通数据的入参、调它、把它的
-事件转成日志与进度点，再按结局写回项目记录、发通知、记「跳过」。
+打开项目（拿预约、补视图）、运行前更新与运行环境确认、收尾项目、队列预下载都由 MFW 项目
+插件的服务做（``open_*``、``update_*``、``confirm_*``、``finish_*``、``prefetch_*``、
+``discover_*``）：这里只取配置、组装只含 JSON 值的请求、调服务、把它的事件转成日志与进度点，
+再按结局写回项目记录、发通知、记「跳过」。不导入别的插件包（服务经 ``services.client`` 现取）。
 """
 
 from __future__ import annotations
@@ -425,7 +421,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
     def _build_inner_task(self, route: Any) -> "MaaFWPluginAutoProxyTask":
         """``route`` 是 :meth:`_runtime_pool_route` 的结果（``root``、``pool_id``）。"""
 
-        # 延迟导入：runner_task 经 runner 包 import maa，导入即打开 DLL。
+        # 延迟导入：账号流程只在运行前检查通过后才用到。
         from .account_run import (
             MaaFWPluginAutoProxyTask,
         )

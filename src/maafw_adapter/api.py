@@ -17,7 +17,7 @@
 """外壳配置导入的 3 个端点与端点专用模型（从宿主 ``app/task/MaaFW/api.py`` 原样搬来）。
 
 端点函数名、路径、docstring、``response_model`` 不改：operation id 由函数名和路径生成，
-MCP 白名单靠它。端点实现 ``shell_api`` 只在端点函数体内导入（规则 L）。
+MCP 白名单靠它。端点实现 ``shell_api`` 只在端点函数体内导入。
 """
 
 from typing import (

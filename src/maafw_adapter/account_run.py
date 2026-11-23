@@ -219,9 +219,11 @@ from .services import client as service_client
 
 logger = get_logger("MaaFW 插件自动代理")
 
-# 桌面游戏启停的时限常量（等窗口、URL 拉起、兜底关闭）只在 desktop_game 里定义一份。
+# 桌面游戏启停、设备配置、运行前设置、跑计划都在 MFW 运行插件里（经它的服务调，services.client）；
+# 资源包修复与交回项目预约经 MFW 项目插件的服务。
 # 一次尝试算成功、信号、要更新游戏还是失败，失败了重不重试、先不先修资源、重不重启客户端，
-# 都由 run_verdict.judge_attempt 判定（环境级失败的标记也在那里）；主循环只读判定。
+# 都由专项共用库 run_verdict.judge_attempt 判定（运行服务的失败按 code；环境级失败的标记也在那里）；
+# 主循环只读判定。
 # 给人看的文案（失败摘要、资源包失败停止、重跑的称呼、重试与周期提示）在 run_messages，
 # 运行设置的原值解析（时限、原地打转、周期名单、键位）在 run_settings。
 # 哪些 worker 日志 / 原生诊断进界面的几组文案规则在 worker_protocol（forwards_to_ui）：

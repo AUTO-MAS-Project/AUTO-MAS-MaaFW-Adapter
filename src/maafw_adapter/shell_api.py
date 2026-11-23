@@ -54,8 +54,8 @@ from maafw_interface.interface.task_config import (
     normalize_snapshot,
 )
 from maafw_native.layout import view_dir
-from maafw_project_update.api.common import MaaFWApiReply
 
+from .api_reply import MaaFWApiReply
 from .services import client
 from .shell_instances import (
     ShellImportPlan,

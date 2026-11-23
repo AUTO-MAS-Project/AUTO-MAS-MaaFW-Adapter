@@ -22,7 +22,7 @@
 
 插件路径在建 L3 之前，L2 已经拿了托管 X 锁（不可重入），所以管理器以「宿主已持锁」
 模式运行。旧路径由 L2 交给管理器的几样（history、context、``_manager_controls_users``）
-在这里补上。管理器模块经运行积木 import ``maa``，只在函数体内导入（规则 L）。
+在这里补上。管理器模块只在函数体内导入（声明登记时不必拉起整条运行编排）。
 """
 
 from __future__ import annotations
@@ -47,7 +47,10 @@ class MaaFWExpander(UserExpander):
     async def main_task(self) -> None:
         await self.script_info.set_state(status="运行")
         self._entered = True
-        from .manager import _BENIGN_SKIPS, MaaFWEmbeddedManager  # 规则 L：函数内导入
+        from .manager import (
+            _BENIGN_SKIPS,
+            MaaFWEmbeddedManager,
+        )  # 函数内导入（声明登记时不拉起运行编排）
 
         manager = MaaFWEmbeddedManager(
             self.script_info, host_locked_config=self.script_config
@@ -88,7 +91,7 @@ class MaaFWExpander(UserExpander):
 async def prefetch_check(config: Any) -> list:
     """队列预下载：按项目更新模式和凭据发现发行包更新（沿用管理器的同名静态方法）。"""
 
-    from .manager import MaaFWEmbeddedManager  # 规则 L：函数内导入
+    from .manager import MaaFWEmbeddedManager  # 函数内导入（声明登记时不拉起运行编排）
 
     return await MaaFWEmbeddedManager.check_prefetch(config)
 
