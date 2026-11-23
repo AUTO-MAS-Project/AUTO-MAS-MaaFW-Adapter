@@ -268,6 +268,8 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         self.cur_user_log_started_at: datetime | None = None
         # on_crash 记下的异常原文：还没进第一次尝试就崩了时，推送靠它说原因
         self._crash_message: str | None = None
+        # 已记进账号日志与 history 状态的那个异常（_mark_user_crashed）
+        self._crash_marked: Exception | None = None
         # 当前这次尝试给用户看的称呼（「第 2 次尝试」「清理残留后的重新运行」），与日志开头
         # 那行同口径：通知的任务详情和失败截图标签用它，不用 _record_attempt 的内部序号——
         # 清理后的重跑不计入尝试次数，内部序号会比日志多 1。
@@ -729,9 +731,14 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         if self.stopped_manually:
             self._append_log("已手动停止", warning=True)
         # 收尾（含脚本后任务）抛出的异常原样交给生命周期桥，由它调一次 on_crash；
-        # 这里再调就会重复记「异常」、重复发错误通知。
+        # 这里再调就会重复记「异常」、重复发错误通知。但历史在下面的 finally 里就存，
+        # 等不到 on_crash：先把这次尝试记成异常再存，on_crash 不再重记。
         try:
             await self._finalize_user()
+        except Exception as error:
+            with suppress(Exception):
+                await self._mark_user_crashed(error)
+            raise
         finally:
             try:
                 if not self._history_saved:
@@ -802,15 +809,27 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         await self._push_user_statistics()
         await self._release_project_path()
 
-    async def on_crash(self, e: Exception) -> None:
-        await self.cur_user_item.set_state(status="异常")
-        logger.exception(f"MaaFW 内置运行任务出现异常: {e}")
+    async def _mark_user_crashed(self, e: Exception) -> None:
+        """把这次尝试记成崩溃：账号日志状态写异常原文，history 状态记 error。
+
+        同一个异常只记一次：收尾抛的异常 ``final_task`` 存历史前先记，生命周期桥随后调
+        ``on_crash`` 时不再重写日志状态。
+        """
+
+        if getattr(self, "_crash_marked", None) is e:
+            return
         # 还没进第一次尝试就崩了（prepare、脚本前任务出错）时推送靠它说原因
         self._crash_message = str(e)
         if self.cur_user_log is not None:
             await self.cur_user_log.set_state(status=f"MaaFW 内置运行任务出现异常: {e}")
             if self.cur_user_log_started_at is not None:
                 self._ledger.mark_error(id(self.cur_user_log))
+        self._crash_marked = e
+
+    async def on_crash(self, e: Exception) -> None:
+        await self.cur_user_item.set_state(status="异常")
+        logger.exception(f"MaaFW 内置运行任务出现异常: {e}")
+        await self._mark_user_crashed(e)
         try:
             await Publisher.send(
                 id=self.task_info.task_id,
