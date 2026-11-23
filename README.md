@@ -11,7 +11,7 @@
 - `auto-mas-core`：插件 SDK。要带托管生命周期钩子、`ScriptTypeDecl.game_kind` / `desktop_session` 和 `teardown_blockers` 的宿主；SDK 的发行号带不带这些出口都一样，所以在导入时检查，没有就拒绝加载。
 - `auto-mas-maafw-interface`、`auto-mas-maafw-native`：两块库。
 - `auto-mas-maafw-adapter-kit`：专项共用库（属主入口、密码字段加解密、默认任务队列、保存前整理、备份归档；账号日志与通知文案、运行设置解析、代理次数、信号聚合、项目遥测、良性跳过的几句话）。
-- `auto-mas-maafw-agent-env`、`auto-mas-maafw-runner`、`auto-mas-maafw-project-update`：三块服务插件。插件声明 `requires` 这三块的服务，还直接 import 它们的模块，所以依赖都写到次版本上限 `<0.3`。
+- `auto-mas-maafw-agent-env`、`auto-mas-maafw-runner`、`auto-mas-maafw-project-update`：三块服务插件。插件声明 `requires` 这三块的服务、只经服务调它们，不再 import 它们的模块；依赖范围暂时照旧写到次版本上限 `<0.3`，发版准备时按 MFW 服务化方案改成只写下限。
 
 宿主必须是不再内置 MFW / M9A / MSS 的让位分支；仍内置时加载会报 `ImportError`。
 
@@ -25,7 +25,8 @@
   - `on_script_removed`：删掉这个托管的项目副本（副本记着别的属主时不删），再起一次运行池对账。
 - 声明函数：`game_kind` 按所选控制器收窄游戏类型（Adb 是模拟器，其余是客户端，判断不了返回 `None`）；`desktop_session` 在这次运行会选出的控制器是 Win32 时为真。
 - 停用前：有托管还没收尾时 `teardown_blockers` 给出原因，宿主拒绝停用、重载、卸载。
-- 跨插件调用：经服务调的经 `services.SLOT`（插件启用时绑宿主给的解析器、停用时解，管理器和外壳从槽里现取服务）。`requires` 按 MFW 服务化方案写全 74 个操作名（共用库的常量拼成）。属主登记走项目服务的 `maafw.project.v1.owner_register` / `owner_unregister`（启用、停用时只试一次），本插件提供属主服务 `maafw.owner.maafw_adapter.v1.<操作>` 的 8 个操作（共用库的 `ConfigOwner` + `OwnerServiceMixin`）。管理器的运行环境自检与运行池路由走 agent 环境服务的 `runtime_check`、`runtime_route`。其余直接 import 三块服务插件的模块，全部写在函数体内，或者放在只会在函数体内首次导入的模块（`manager`、`account_run`、`shell_api`、`shell_instances`）里。建计划、打码值、视图目录和上面那些文案、运行设置不经服务插件，直接从两块库和共用库取。
+- 跨插件调用：经服务调的经 `services.SLOT`（插件启用时绑宿主给的解析器、停用时解，管理器和外壳从槽里现取服务）。`requires` 按 MFW 服务化方案写全 74 个操作名（共用库的常量拼成）。属主登记走项目服务的 `maafw.project.v1.owner_register` / `owner_unregister`（启用、停用时只试一次），本插件提供属主服务 `maafw.owner.maafw_adapter.v1.<操作>` 的 8 个操作（共用库的 `ConfigOwner` + `OwnerServiceMixin`）。管理器的运行环境自检与运行池路由走 agent 环境服务的 `runtime_check`、`runtime_route`；打开项目、运行前 / 后更新、环境确认、收尾项目、预下载与发现更新走项目服务（打开项目经共用库 `open_project`）；账号运行开运行服务的账号句柄，桌面游戏、设备配置、运行前设置、跑计划走运行服务，资源包修复走项目服务，交回项目预约经共用库 `release_run_reservation`；复制 / 删除托管、外壳配置导入认托管与补视图也走项目服务。源码里不 import 三块服务插件的任何模块（含函数体内）。建计划、打码值、视图目录、判定、尝试记账、上面那些文案与运行设置不经服务插件，直接从两块库和共用库取。
+- 停止通知与选定游戏：外壳接宿主的 `on_stop_requested`（转给管理器的 `_on_finalize_cancel_requested`），声明 `defer_game_session`，确认有可运行账号之后才选定游戏会话（宿主没有这两个钩子时照旧）。
 - 宿主能力经 `auto_mas_core.host` 的出口取；还没有出口的只剩通知任务基类 `app.core.notify.lifecycle.NotificationTaskBase` 和通知格式 `app.core.notify.formats.maafw`，只在宿主进程里跑。
 
 ## 开发与测试
