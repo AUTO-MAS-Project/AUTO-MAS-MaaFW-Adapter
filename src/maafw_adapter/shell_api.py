@@ -43,15 +43,13 @@ from maafw_interface.interface.task_config import (
     normalize_global_options,
     normalize_snapshot,
 )
+from maafw_native.layout import view_dir
 from maafw_project_update.api.common import (
     MaaFWApiReply,
     logger,
     maafw_effective_root,
 )
-from maafw_project_update.host.embedded_project import (
-    embedded_project_dir,
-    view_imported_from,
-)
+from maafw_project_update.host.embedded_project import view_imported_from
 
 from .shell_instances import (
     ShellImportPlan,
@@ -86,7 +84,7 @@ def _candidate_roots(script_id: str, script_config: Any) -> list[Path]:
     if source:
         roots.append(Path(source))
     if view_imported_from(script_id, source):
-        roots.append(embedded_project_dir(script_id))
+        roots.append(view_dir(script_id))
     return roots
 
 
@@ -289,7 +287,7 @@ async def list_shell_instances(
     # 显示名要 interface；副本还没建好就退回外壳里记的原名，不为这个触发导入
     interface: MaaFWInterface | None = None
     translate: Translate | None = None
-    view_root = embedded_project_dir(script_id)
+    view_root = view_dir(script_id)
     if instances and view_root.is_dir():
         try:
             interface = await asyncio.to_thread(load_interface_model_cached, view_root)

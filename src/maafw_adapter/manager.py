@@ -73,19 +73,31 @@ from maafw_adapter_kit.backup_archive import (
 from maafw_adapter_kit.default_snapshot import (
     fill_default_task_snapshots,
 )
+from maafw_adapter_kit.project_texts import BENIGN_SKIPS, SKIP_OCCUPIED
+from maafw_adapter_kit.proxy_quota import (
+    proxy_times_used_up,
+    proxy_today,
+)
+from maafw_adapter_kit.run_notices import (
+    proxy_result_body,
+    signal_summary_title,
+    user_results_text,
+)
+from maafw_adapter_kit.signal_notice import (
+    MaaFWSignalTracker,
+    push_signal_notices,
+)
+from maafw_adapter_kit.telemetry_project import record_project_run
 from maafw_agent_env.host.runtime_check import describe_unusable_runtime
 from maafw_agent_env.host.runtime_route import resolve_runtime_pool_route
+from maafw_interface.runner.models import SERVER_MAINTENANCE
+from maafw_native.layout import view_dir
 from maafw_project_update.host import owners
-from maafw_project_update.host.embedded_project import (
-    resolve_maafw_project_root,
-)
 from maafw_project_update.host.owners import RecordPatch, write_managed_record
 from maafw_project_update.host.project_environment import (
     prepare_project_environment_sync,
 )
 from maafw_project_update.host.project_session import (
-    BENIGN_SKIPS,
-    SKIP_OCCUPIED,
     MaaFWProjectDownload,
     MaaFWProjectEvent,
     MaaFWProjectLease,
@@ -102,21 +114,6 @@ from maafw_project_update.host.update_credentials import (
     AutoUpdateMode,
     resolve_auto_update_mode,
 )
-from maafw_runner.host.proxy_quota import (
-    proxy_times_used_up,
-    proxy_today,
-)
-from maafw_runner.host.run_notices import (
-    proxy_result_body,
-    signal_summary_title,
-    user_results_text,
-)
-from maafw_runner.host.signal_notice import (
-    SERVER_MAINTENANCE,
-    MaaFWSignalTracker,
-    push_signal_notices,
-)
-from maafw_runner.host.telemetry_project import record_project_run
 
 from .config import MaaFWConfig, MaaFWUserConfig
 
@@ -448,7 +445,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         ``run_messages.format_user_log_line`` 一致，这样并入账号日志后看不出接缝。
         """
 
-        from maafw_runner.host.run_messages import update_log_lines
+        from maafw_adapter_kit.run_messages import update_log_lines
 
         logger.info(f"MFW 项目更新：{message}")
         lines = update_log_lines(message, datetime.now().astimezone())
@@ -664,9 +661,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         try:
             archive_native_backup(
                 self.script_info.script_id,
-                resolve_maafw_project_root(
-                    str(self.script_info.script_id), self.script_config
-                ),
+                view_dir(str(self.script_info.script_id)),
             )
         except Exception:
             logger.opt(exception=True).warning(
@@ -837,9 +832,7 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         assert self.script_config is not None
         project_path: Path | None
         try:
-            project_path = resolve_maafw_project_root(
-                str(self.script_info.script_id), self.script_config
-            ).resolve()
+            project_path = view_dir(str(self.script_info.script_id)).resolve()
         except Exception:  # noqa: BLE001 - 遥测失败不影响任务，项目记 other
             project_path = None
         await record_project_run(

@@ -58,8 +58,47 @@ from maafw_adapter_kit.option_secrets import (
     script_task_snapshots,
     user_task_snapshot,
 )
+from maafw_adapter_kit.proxy_quota import (
+    proxy_day_rolled,
+    proxy_times_used_up,
+    proxy_today,
+    success_settlement,
+)
+from maafw_adapter_kit.run_messages import (
+    MISSING_TASK_NOTICE_PREFIX,
+    completed_result_log_lines,
+    describe_failed_result,
+    format_completed_task_labels,
+    format_run_overview_log,
+    format_user_log_line,
+    period_all_done_message,
+    record_event_point,
+    remaining_done_message,
+    result_task_labels,
+    signal_attempt_facts,
+)
+from maafw_adapter_kit.run_notices import (
+    statistics_mark,
+    statistics_title,
+    success_notice_text,
+)
+from maafw_adapter_kit.run_settings import (
+    load_json_dict,
+    load_script_hotkeys,
+    loop_guard,
+    period_limits,
+    task_time_limits,
+)
+from maafw_adapter_kit.signal_notice import (
+    MAINTENANCE_LAST_STATUS,
+    MAINTENANCE_SKIP_MESSAGE,
+    SIGNAL_USER_MESSAGES,
+    MaaFWSignalTracker,
+)
 from maafw_interface.controller_win32.service import (
+    WIN32_NO_WINDOW_RULES_MESSAGE,
     controller_has_window_rules,
+    find_controller,
 )
 from maafw_interface.interface.agent_command import MaaFWAgentCommandPlan
 from maafw_interface.interface.models import (
@@ -72,7 +111,14 @@ from maafw_interface.interface.preview import (
 from maafw_interface.interface.service import (
     MaaFWInterfaceService,
 )
+from maafw_interface.run_redaction import (
+    log_redaction_notice,
+    project_log_secret_variants,
+    run_secret_values,
+    secret_log_variants,
+)
 from maafw_interface.runner.models import (
+    SERVER_MAINTENANCE,
     MaaFWDeviceConfig,
     MaaFWRunPlan,
     MaaFWRunResult,
@@ -84,8 +130,17 @@ from maafw_interface.runner.plan_transforms import (
     parse_period_records,
     period_records_after,
 )
+from maafw_interface.runner.resource_failure import (
+    describe_resource_failure,
+)
+from maafw_interface.runner.run_events import (
+    CATEGORY_SIGNAL,
+    STAGE_CLIENT,
+    STAGE_PRETASK,
+)
 from maafw_interface.runner.run_plan import (
     MaaFWRunPlanError,
+    build_maafw_run_plan,
     resolve_run_selection,
 )
 from maafw_interface.runner.task_selection import (
@@ -96,10 +151,10 @@ from maafw_interface.runner.task_selection import (
     describe_plan_failure,
     inspect_task_snapshot,
 )
+from maafw_native.layout import view_dir
 from maafw_native.project_runtime import (
     describe_project_runtime_architecture_mismatch,
 )
-from maafw_project_update.host.embedded_project import resolve_maafw_project_root
 from maafw_project_update.host.project_path import (
     is_project_updating,
     release_run_reservation,
@@ -110,12 +165,6 @@ from maafw_project_update.host.resource_repair import (
     MaaFWResourceRepair,
 )
 from maafw_project_update.host.update_credentials import resolve_update_proxy_url
-from maafw_runner.core.runner.run_events import (
-    CATEGORY_SIGNAL,
-    STAGE_CLIENT,
-    STAGE_PRETASK,
-)
-from maafw_runner.core.runner.service import MaaFWRunnerService
 from maafw_runner.host.attempt_ledger import MaaFWAttemptLedger
 from maafw_runner.host.desktop_game import (
     MaaFWDesktopGame,
@@ -124,14 +173,12 @@ from maafw_runner.host.desktop_game import (
     desktop_launch_managed,
 )
 from maafw_runner.host.device_config import (
-    WIN32_NO_WINDOW_RULES_MESSAGE,
     MaaFWAdbDeviceState,
     adb_ready_timeout,
     build_adb_control_profile,
     build_adb_device_config,
     build_win32_device_config,
     choose_game_package,
-    find_controller,
     optional_int,
     resolve_adb_path,
     resolve_login_adb_path,
@@ -157,45 +204,7 @@ from maafw_runner.host.pretask_run import (
     MaaFWPretaskRunRequest,
     pretasks_need_rerun,
 )
-from maafw_runner.host.proxy_quota import (
-    proxy_day_rolled,
-    proxy_times_used_up,
-    proxy_today,
-    success_settlement,
-)
-from maafw_runner.host.resource_failure import (
-    describe_resource_failure,
-)
-from maafw_runner.host.run_messages import (
-    MISSING_TASK_NOTICE_PREFIX,
-    describe_failed_result,
-    format_completed_task_labels,
-    format_run_overview_log,
-    format_user_log_line,
-    period_all_done_message,
-    record_event_point,
-    remaining_done_message,
-    signal_attempt_facts,
-)
-from maafw_runner.host.run_notices import (
-    statistics_mark,
-    statistics_title,
-    success_notice_text,
-)
 from maafw_runner.host.run_record import RUN_RECORD_HISTORY_KEY
-from maafw_runner.host.run_redaction import (
-    log_redaction_notice,
-    project_log_secret_variants,
-    run_secret_values,
-    secret_log_variants,
-)
-from maafw_runner.host.run_settings import (
-    load_json_dict,
-    load_script_hotkeys,
-    loop_guard,
-    period_limits,
-    task_time_limits,
-)
 from maafw_runner.host.run_verdict import (
     VERDICT_SIGNAL,
     VERDICT_SUCCEEDED,
@@ -204,29 +213,6 @@ from maafw_runner.host.run_verdict import (
 from maafw_runner.host.run_verdict import (
     MaaFWWorkstationLocked as _MaaFWWorkstationLocked,
 )
-from maafw_runner.host.signal_notice import (
-    MAINTENANCE_LAST_STATUS,
-    MAINTENANCE_SKIP_MESSAGE,
-    SERVER_MAINTENANCE,
-    SIGNAL_USER_MESSAGES,
-    MaaFWSignalTracker,
-)
-
-# 运行积木早于「被项目停止」标记时没有这两个出口：结果里也不会有这一项，照旧写「任务完成」。
-try:
-    from maafw_runner.host.run_messages import (
-        completed_result_log_lines,
-        result_task_labels,
-    )
-except ImportError:  # pragma: no cover - 只有旧运行积木走这里
-
-    def completed_result_log_lines(plan: Any, result: Any) -> list[str]:
-        labels = format_completed_task_labels(plan, result.completedTasks)
-        return ["MaaFW 任务完成: " + ", ".join(labels)]
-
-    def result_task_labels(plan: Any, result: Any) -> list[str]:
-        return format_completed_task_labels(plan, result.completedTasks)
-
 
 logger = get_logger("MaaFW 插件自动代理")
 
@@ -265,9 +251,8 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         self.cur_user_item = self.script_info.user_list[self.script_info.current_index]
         self.cur_user_uid = uuid.UUID(self.cur_user_item.user_id)
         self.cur_user_config = self.user_config[self.cur_user_uid]
-        self.project_path = resolve_maafw_project_root(
-            str(self.script_info.script_id), self.script_config
-        ).resolve()
+        # 有效项目根就是视图：只由托管 ID 推出、不看配置（原生库识别库 view_dir）
+        self.project_path = view_dir(str(self.script_info.script_id)).resolve()
         self.interface_model: MaaFWInterface | None = None
         self.base_run_plan: MaaFWRunPlan | None = None
         self.run_plan: MaaFWRunPlan | None = None
@@ -954,8 +939,8 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
             )
             self.missing_task_names = list(dict.fromkeys(inspection.missing_task_names))
             # 今天不跑的实例与红灯一样在建计划之前排除，不校验它们的选项（坏配置不挡整轮）
-            # 跨插件：0.1.0 直接 import 运行积木的 MaaFWRunnerService（越界 S1）。
-            plan = MaaFWRunnerService().build_plan(
+            # 建计划是解析库的纯函数（运行积木的 MaaFWRunnerService.build_plan 原样转调它）
+            plan = build_maafw_run_plan(
                 self.project_path,
                 interface_model,
                 controller_name=controller_name,

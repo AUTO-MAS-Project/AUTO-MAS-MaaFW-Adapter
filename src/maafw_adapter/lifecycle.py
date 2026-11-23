@@ -48,10 +48,10 @@ async def clone_script(source: Any, target: Any, *, owner: str) -> None:
     """
 
     # 规则 L：项目更新插件的模块只在函数体内导入
+    from maafw_native.layout import view_dir
     from maafw_project_update.host.embedded_project import (
         FollowSourceCloneUnavailable,
         clone_embedded_copy,
-        embedded_project_dir,
         is_source_form,
     )
     from maafw_project_update.host.project_path import (
@@ -66,7 +66,7 @@ async def clone_script(source: Any, target: Any, *, owner: str) -> None:
     group_channel = str(source.Update.Channel or "stable")
     source_form = is_source_form(source)
 
-    target_key = await try_reserve_project_path(embedded_project_dir(str(target.uid)))
+    target_key = await try_reserve_project_path(view_dir(str(target.uid)))
     if target_key is None:
         return
     try:
@@ -94,13 +94,11 @@ async def remove_script(script_id: str, *, owner: str) -> None:
     """
 
     from auto_mas_core.host.utils import io as utils_io
-    from maafw_project_update.host.embedded_project import (
-        embedded_project_dir,
-        view_owner,
-    )
+    from maafw_native.layout import view_dir
+    from maafw_project_update.host.embedded_project import view_owner
     from maafw_project_update.host.live_projects import reconcile_in_background
 
-    embedded_copy = embedded_project_dir(script_id)
+    embedded_copy = view_dir(script_id)
     if embedded_copy.exists():
         recorded = await asyncio.to_thread(view_owner, embedded_copy)
         if recorded is not None and recorded[0] != owner:
@@ -118,9 +116,9 @@ def _project_interface(script: Any) -> Any | None:
     """读这个托管的视图里的 interface；视图还没建、读不出来时返回 ``None``。"""
 
     from maafw_interface.interface.loader import load_interface_model_cached
-    from maafw_project_update.host.embedded_project import resolve_maafw_project_root
+    from maafw_native.layout import view_dir
 
-    root = resolve_maafw_project_root(str(script.uid), script)
+    root = view_dir(str(script.uid))
     if not root.is_dir():
         return None
     try:
