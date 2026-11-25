@@ -30,6 +30,7 @@ MAS 在 MFW 运行插件起的 worker 子进程内加载项目的 MaaFramework �
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 import uuid
 from collections.abc import Mapping
@@ -129,6 +130,25 @@ AutoUpdateMode = Literal["Off", "BeforeRun", "AfterRun"]
 
 # 整脚本良性跳过的几句话（项目被暂时占着，不是故障）：脚本记「跳过」、发 warning。
 _BENIGN_SKIPS = BENIGN_SKIPS
+
+
+async def _fill_default_snapshots(
+    script_id: str, script_config: Any, *, holds_lock: bool
+) -> None:
+    """新账号的空任务队列写成默认队列（共用库 ``fill_default_task_snapshots``）。
+
+    ``holds_lock``：宿主 L2 替这一轮持着托管的 X 锁（``_host_locked_config`` 不为 None）。共用库带
+    这个参数时照常写；0.3.0 的共用库没有它，就不传（托管锁着时跳过，与原来相同）。按函数签名认，
+    不看版本号。
+    """
+
+    if (
+        holds_lock
+        and "holds_lock" in inspect.signature(fill_default_task_snapshots).parameters
+    ):
+        await fill_default_task_snapshots(script_id, script_config, holds_lock=True)
+    else:
+        await fill_default_task_snapshots(script_id, script_config)
 
 
 def describe_unsupported_host() -> str | None:
@@ -283,8 +303,13 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
             if opened.kind != "opened":
                 return opened.reason
             self._project_lease = opened.lease
-            # 新账号的默认队列也会在线程里读取视图，继续持预约直到取到 X。
-            await fill_default_task_snapshots(script_id, script_config)
+            # 新账号的默认队列也会在线程里读取视图，继续持预约直到取到 X。宿主已持锁时告诉
+            # 共用库锁是替本轮持的，否则它见托管锁着就不写。
+            await _fill_default_snapshots(
+                script_id,
+                script_config,
+                holds_lock=self._host_locked_config is not None,
+            )
             return None
 
         async def lock_before_release() -> str | None:
