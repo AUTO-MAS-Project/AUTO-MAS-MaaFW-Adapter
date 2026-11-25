@@ -1362,7 +1362,8 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
 
     async def _shutdown_runner(self) -> None:
         if self._account is not None:
-            # 运行前设置的清理（运行服务 pretask_kill，没有取消点：被取消时脱手、提供方照样做完）
+            # 运行前设置的清理（运行服务 pretask_kill，没有取消点）。被取消时脱手：作业不在本任务里跑，
+            # 先接着做；它带着本轮的进程作用域，停止后作用域收尾时（宿主 force_close 之后）被一起取消
             reply = await service_client("运行前设置").run(
                 RUNNER_PRETASK_KILL,
                 account_request(self._account),
@@ -1756,7 +1757,8 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
         return None
 
     async def _quit_game(self, request: dict[str, Any]) -> Reply:
-        """运行服务的 ``desktop_quit_*``（没有取消点：被取消时脱手、提供方照样关完、恢复分辨率）。
+        """运行服务的 ``desktop_quit_*``（没有取消点）。被取消时脱手：作业不在本任务里跑，先接着关游戏、
+        恢复分辨率；它带着本轮的进程作用域，停止后作用域收尾时（宿主 force_close 之后）被一起取消。
 
         失败（读不出客户端路径的原文、关游戏时出错）按 §2.2 抛同一句话；开没开过照结果更新。
         """
