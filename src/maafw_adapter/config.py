@@ -381,6 +381,10 @@ class MaaFWConfig(ScriptEntry):
     Info: InfoFields = Field(default_factory=InfoFields)
 
     class RunFields(ConfigGroup):
+        ExecutionSession: Literal["main", "desktop"] = Field(
+            default="main", description="单独启动托管时使用的 Windows 会话"
+        )
+
         DailyOnceTasks: JsonListString = Field(
             default_factory=lambda: "[ ]",
             description="每天正常完成一次后，当天剩余时间跳过的 MaaFW 任务名列表",
