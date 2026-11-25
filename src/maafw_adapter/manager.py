@@ -267,9 +267,16 @@ class MaaFWEmbeddedManager(NotificationTaskBase):
         ) -> str | None:
             if opened.record_update is not None:
                 # 视图已变，取消时也先把导入报告写完，再交回项目预约。写回经本插件自己的属主。
+                # 插件路径上 L2 已持托管 X 锁（票在本上下文里）：带 holds_lock 直接写节点，
+                # 宿主 update_script 对锁着的托管一律拒绝。
                 from .plugin import OWNER
 
-                await write_or_raise(OWNER, script_id, opened.record_update)
+                await write_or_raise(
+                    OWNER,
+                    script_id,
+                    opened.record_update,
+                    holds_lock=self._host_locked_config is not None,
+                )
             if opener.stopping:
                 return None
             self._env_confirm_needed = opened.env_confirm_needed
