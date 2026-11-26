@@ -20,7 +20,7 @@ keywords = [
 # 同号、带出口前后都是 5.9.0b1，下限提不上去，改在导入时检查（plugin.py）。
 dependencies = [
   "auto-mas-core>=5.9.0b1,<6",
-  "auto-mas-maafw-interface>=0.3.0,<0.4",
+  "auto-mas-maafw-interface>=0.3.1,<0.4",
   "auto-mas-maafw-native>=0.3.0,<0.4",
   "auto-mas-maafw-adapter-kit>=0.3.1,<0.4",
   "auto-mas-maafw-agent-env>=0.3.0",

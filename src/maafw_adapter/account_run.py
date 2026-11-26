@@ -701,7 +701,8 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
                 )
             else:
                 if verdict.repair_resource and result.resourceFailure is not None:
-                    # 资源包没能加载：原因只在原生 ERR 行里，换成一句人话（取不到才保留
+                    # 资源包没能加载：MaaFramework 6.0 起按它给的结构化诊断说，5.x 的原因只在原生
+                    # ERR 行里；换成一句人话（取不到才保留「详见 .maafw.log」）。（取不到才保留
                     # 「详见 .maafw.log」）。
                     message = await asyncio.to_thread(
                         describe_resource_failure,
@@ -710,6 +711,7 @@ class MaaFWPluginAutoProxyTask(TaskExecuteBase):
                         self._attempt_native_errors,
                         project_root=self.project_path,
                         secrets=self._secret_log_variants(),
+                        load_errors=result.resourceFailure.errors,
                     )
                 else:
                     message = describe_failed_result(
