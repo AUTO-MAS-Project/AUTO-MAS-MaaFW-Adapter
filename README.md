@@ -11,7 +11,7 @@
 - `auto-mas-core`：插件 SDK。要带托管生命周期钩子、`ScriptTypeDecl.game_kind` / `desktop_session` 和 `teardown_blockers` 的宿主；SDK 的发行号带不带这些出口都一样，所以在导入时检查，没有就拒绝加载。
 - `auto-mas-maafw-interface`、`auto-mas-maafw-native`：两块库。
 - `auto-mas-maafw-adapter-kit`：专项共用库（属主入口、密码字段加解密、默认任务队列、保存前整理、备份归档；账号日志与通知文案、运行设置解析、代理次数、信号聚合、项目遥测、良性跳过的几句话）。
-- `auto-mas-maafw-agent-env`、`auto-mas-maafw-runner`、`auto-mas-maafw-project-update`：三块服务插件。插件声明 `requires` 这三块的服务、只经服务调它们，不再 import 它们的模块；依赖范围：两块库写 `>=0.3.0,<0.4`，专项共用库写 `>=0.3.1,<0.4`，三块服务插件只写下限 `>=0.3.0`。
+- `auto-mas-maafw-agent-env`、`auto-mas-maafw-runner`、`auto-mas-maafw-project-update`：三块服务插件。插件声明 `requires` 这三块的服务、只经服务调它们，不再 import 它们的模块；依赖范围：解析库写 `>=0.3.1,<0.4`，原生库写 `>=0.3.0,<0.4`，专项共用库写 `>=0.3.1,<0.4`，三块服务插件只写下限 `>=0.3.0`。
 
 宿主必须是不再内置 MFW / M9A / MSS 的让位分支；仍内置时加载会报 `ImportError`。
 
