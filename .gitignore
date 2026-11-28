@@ -7,8 +7,7 @@ __pycache__/
 build/
 dist/
 
-# 单元测试只在本地跑，不随仓库提交
-/tests/
+/frontend/node_modules/
 
 # 宿主测试运行产生的用户目录
 /config/

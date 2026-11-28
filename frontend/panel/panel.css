@@ -1,0 +1,81 @@
+#app,
+.stack {
+  display: grid;
+  gap: 12px;
+}
+
+.actions,
+.checks,
+.queue-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.queue-row > strong,
+.actions > input {
+  flex: 1;
+  min-width: 8rem;
+}
+
+.queue-row > strong {
+  overflow-wrap: anywhere;
+}
+
+.checks > label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 400;
+}
+
+button {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--mas-border, GrayText);
+  border-radius: var(--mas-radius, 6px);
+  color: inherit;
+  background: var(--mas-bg-elevated, Canvas);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+details > .stack,
+details > .grid {
+  margin-block-start: 12px;
+}
+
+p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-inline-start: 24px;
+}
+
+.task-select > select {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.queue-editor {
+  margin-block-start: 8px;
+  padding: 12px;
+  border: 1px solid var(--mas-border, GrayText);
+  border-radius: var(--mas-radius, 6px);
+}
