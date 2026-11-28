@@ -31,6 +31,7 @@ from typing import Any
 
 from auto_mas_core import Config, ScriptAdapterPlugin, ScriptTypeDecl, TaskMode
 from auto_mas_core.host.utils import get_logger
+from fastapi import APIRouter
 from maafw_adapter_kit.owner_entry import (
     ConfigOwner,
     OwnerServiceMixin,
@@ -46,9 +47,11 @@ from maafw_adapter_kit.services import (
 
 from . import expander as _expander
 from . import lifecycle
-from .api import router
+from .api import router as legacy_router
 from .config import MaaFWConfig, MaaFWUserConfig
 from .expander import MaaFWExpander, prefetch_check
+from .panel_api import router as panel_router
+from .restore import RESTORE_POOLS
 from .services import PLUGIN_ID, REQUIRES, SLOT, client
 
 # 同一个开发版 SDK 号码同时出现在让位前后的宿主。仍内置 MFW 的宿主上不加载。
@@ -77,6 +80,12 @@ OWNER_SERVICE = owner_service_prefix(OWNER_NAME)
 #: 本插件名下托管的属主：项目服务经属主服务现取，按确切类型认领 ``MaaFWConfig``
 OWNER = ConfigOwner(OWNER_NAME, lambda: MaaFWConfig)
 
+router = APIRouter()
+router.include_router(legacy_router)
+router.include_router(
+    panel_router, prefix=f"/api/plugin/{PLUGIN_ID}", include_in_schema=False
+)
+
 
 class Plugin(OwnerServiceMixin, ScriptAdapterPlugin):
     script_type_key = "MaaFW"
@@ -96,6 +105,8 @@ class Plugin(OwnerServiceMixin, ScriptAdapterPlugin):
         activity_game=None,
         game_kind=lifecycle.expected_game_kind,
         desktop_session=lifecycle.supports_desktop_session,
+        first_account_mode="wizard",
+        restore_pools=RESTORE_POOLS,
     )
 
     async def pre_enable(self):

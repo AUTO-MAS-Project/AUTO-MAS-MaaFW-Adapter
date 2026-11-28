@@ -39,7 +39,7 @@ Issues = "https://github.com/AUTO-MAS-Project/AUTO-MAS-MaaFW-Adapter/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-maafw_adapter = ["py.typed"]
+maafw_adapter = ["py.typed", "ui/*", "ui/**/*", "i18n/*.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

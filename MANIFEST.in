@@ -1,3 +1,5 @@
 include CHANGELOG.md
+recursive-include src/maafw_adapter/ui *
+recursive-include src/maafw_adapter/i18n *.json
 # 单元测试只留本地，不进发行包
 prune tests

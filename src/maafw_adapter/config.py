@@ -38,7 +38,13 @@ from datetime import datetime
 from pathlib import Path as NativePath
 from typing import Annotated, ClassVar, Literal
 
-from auto_mas_core import ScriptEntry, UserEntry
+from auto_mas_core import (
+    DeclarativeBlock,
+    HostBlock,
+    PluginBlock,
+    ScriptEntry,
+    UserEntry,
+)
 from auto_mas_core.host.config import (
     ConfigCollection,
     ConfigGroup,
@@ -85,6 +91,14 @@ warnings.filterwarnings(
 
 class MaaFWUserConfig(UserEntry):
     "MaaFW 账号配置"
+
+    ui_blocks = (
+        HostBlock("config_restore"),
+        DeclarativeBlock(("Info",)),
+        PluginBlock("user", fallback_groups=("Task", "Device")),
+        DeclarativeBlock(("Notify",)),
+        HostBlock("webhooks"),
+    )
 
     class DataFields(AccountRunFields, AccountRunStatusFields):
         PeriodTaskRecords: JsonDictString = Field(
@@ -217,6 +231,11 @@ class MaaFWConfig(ScriptEntry):
     DEFAULT_SCRIPT_NAME: ClassVar = "新 MFW 托管"
     USER_CONFIG_CLASS: ClassVar = MaaFWUserConfig
     DEFAULT_TASK_TIME_LIMIT_OVERRIDES: ClassVar = "{ }"
+    ui_blocks = (
+        PluginBlock("script", fallback_groups=("Info", "Embedded", "Device", "Game", "Run")),
+        HostBlock("game_binding"),
+        DeclarativeBlock(("Update",)),
+    )
 
     class DeviceFields(ConfigGroup):
         AdbAddress: str = Field(
